@@ -142,6 +142,33 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
               }
               .message pre code { background: transparent; padding: 0; }
               .message a { color: var(--primary-dark); }
+              .table-wrap {
+                width: 100%;
+                margin: 0 0 0.85rem;
+                overflow-x: auto;
+                border: 1px solid var(--border);
+              }
+              table {
+                width: 100%;
+                border-collapse: collapse;
+                min-width: 620px;
+                font-size: 0.95rem;
+              }
+              th, td {
+                padding: 0.55rem 0.65rem;
+                border-bottom: 1px solid var(--border);
+                text-align: left;
+                vertical-align: top;
+              }
+              th {
+                background: #eef2f7;
+                font-weight: 700;
+              }
+              tr:last-child td { border-bottom: 0; }
+              .math {
+                white-space: nowrap;
+                font-variant-numeric: tabular-nums;
+              }
 
               .tool-activity {
                 margin-top: 0.8rem;
@@ -373,7 +400,8 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
                   }
                 }
 
-                for (const line of lines) {
+                for (let index = 0; index < lines.length; index += 1) {
+                  const line = lines[index];
                   const trimmed = line.trim();
 
                   if (trimmed.startsWith('```')) {
@@ -397,6 +425,15 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
                   if (!trimmed) {
                     flushParagraph();
                     closeList();
+                    continue;
+                  }
+
+                  if (isTableHeader(lines, index)) {
+                    flushParagraph();
+                    closeList();
+                    const table = collectTable(lines, index);
+                    html.push(renderTable(table.lines));
+                    index = table.endIndex;
                     continue;
                   }
 
@@ -438,9 +475,81 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
                 let html = escapeHtml(text);
                 html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
                 html = html.replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\s)]+)\\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+                html = html.replace(/\\$([^$]+)\\$/g, (_match, expression) => '<span class="math">' + formatInlineMath(expression) + '</span>');
                 html = html.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
                 html = html.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
                 return html;
+              }
+
+              function isTableHeader(lines, index) {
+                const current = lines[index] ? lines[index].trim() : '';
+                const next = lines[index + 1] ? lines[index + 1].trim() : '';
+                return isTableRow(current) && isTableSeparator(next);
+              }
+
+              function collectTable(lines, startIndex) {
+                const tableLines = [lines[startIndex].trim(), lines[startIndex + 1].trim()];
+                let endIndex = startIndex + 1;
+                for (let index = startIndex + 2; index < lines.length; index += 1) {
+                  const trimmed = lines[index].trim();
+                  if (!isTableRow(trimmed) || isTableSeparator(trimmed)) {
+                    break;
+                  }
+                  tableLines.push(trimmed);
+                  endIndex = index;
+                }
+                return { lines: tableLines, endIndex };
+              }
+
+              function renderTable(tableLines) {
+                const headers = parseTableRow(tableLines[0]);
+                const alignments = parseTableRow(tableLines[1]).map((cell) => {
+                  const trimmed = cell.trim();
+                  if (trimmed.startsWith(':') && trimmed.endsWith(':')) {
+                    return 'center';
+                  }
+                  if (trimmed.endsWith(':')) {
+                    return 'right';
+                  }
+                  return 'left';
+                });
+                const rows = tableLines.slice(2).map(parseTableRow);
+                const headerHtml = headers.map((header, index) => (
+                  '<th style="text-align: ' + (alignments[index] || 'left') + '">' + renderInlineMarkdown(header) + '</th>'
+                )).join('');
+                const rowHtml = rows.map((row) => (
+                  '<tr>' + row.map((cell, index) => (
+                    '<td style="text-align: ' + (alignments[index] || 'left') + '">' + renderInlineMarkdown(cell) + '</td>'
+                  )).join('') + '</tr>'
+                )).join('');
+                return '<div class="table-wrap"><table><thead><tr>' + headerHtml + '</tr></thead><tbody>' + rowHtml + '</tbody></table></div>';
+              }
+
+              function parseTableRow(line) {
+                return line
+                  .replace(/^\\|/, '')
+                  .replace(/\\|$/, '')
+                  .split('|')
+                  .map((cell) => cell.trim());
+              }
+
+              function isTableRow(line) {
+                return /^\\|.*\\|$/.test(line) && line.split('|').length > 2;
+              }
+
+              function isTableSeparator(line) {
+                return /^\\|?\\s*:?-{3,}:?\\s*(\\|\\s*:?-{3,}:?\\s*)+\\|?$/.test(line);
+              }
+
+              function formatInlineMath(expression) {
+                return expression
+                  .replace(/\\\\approx/g, '&asymp;')
+                  .replace(/\\\\times/g, '&times;')
+                  .replace(/\\\\pm/g, '&plusmn;')
+                  .replace(/\\\\cdot/g, '&middot;')
+                  .replace(/[{}]/g, '')
+                  .replace(/\\\\/g, '')
+                  .trim();
               }
 
               function escapeHtml(value) {

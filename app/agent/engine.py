@@ -138,7 +138,7 @@ def _format_tool_result(tool_name: str, result: Any) -> str | None:
         if per_serving:
             summary += " Per-serving values are available."
         if isinstance(warnings, list) and warnings:
-            summary += f" {len(warnings)} warning{'s' if len(warnings) != 1 else ''} reported."
+            summary += " Some ingredient conversions used fallback handling."
         return summary
 
     if isinstance(result, str) and result.strip():

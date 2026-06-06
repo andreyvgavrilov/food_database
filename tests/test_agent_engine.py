@@ -43,6 +43,7 @@ def test_extract_tool_activity_formats_calculation_result():
     assert _extract_tool_activity(result) == [
         (
             "Calculated nutrition for **2 ingredients**, total energy **449.34 kcal**, "
-            "protein **62 g**. Per-serving values are available. 1 warning reported."
+            "protein **62 g**. Per-serving values are available. "
+            "Some ingredient conversions used fallback handling."
         )
     ]
