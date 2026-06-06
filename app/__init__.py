@@ -1,0 +1,1 @@
+"""AI nutrition agent application."""
