@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
@@ -64,13 +65,15 @@ def load_settings(env: Mapping[str, str] | None = None, env_file: Path | None = 
     env_values: dict[str, str] = {}
 
     try:
-        from dotenv import dotenv_values
+        from dotenv import dotenv_values, load_dotenv
 
-        env_values.update(
-            {key: str(value) for key, value in dotenv_values(env_file or ROOT_DIR / ".env").items() if value is not None}
-        )
+        resolved_env_file = env_file or ROOT_DIR / ".env"
+        load_dotenv(resolved_env_file, override=False)
+        env_values.update({key: str(value) for key, value in dotenv_values(resolved_env_file).items() if value is not None})
     except Exception:
         env_values.update(_read_env_file(env_file or ROOT_DIR / ".env"))
+
+    env_values.update(os.environ)
 
     if env:
         env_values.update(dict(env))

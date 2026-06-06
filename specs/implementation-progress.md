@@ -24,6 +24,10 @@ Implementation has started from an empty repository. The product specification l
 - Added USDA JSON downloader for the manual update flow. It discovers current JSON archive links from the official USDA FoodData Central downloads page, downloads configured data types, extracts them safely, then imports the extracted JSON.
 - Changed manual update background work to use a fresh SQLite connection and record failed download/import status.
 - Added downloader tests for USDA link discovery and zip extraction.
+- Added `run-app.bat` Windows launcher. It creates `.venv` if needed, installs requirements, creates `.env` from `.env.example` when missing, starts Uvicorn, and opens the browser.
+- Updated config loading so `.env` values are read into app settings and loaded into `os.environ` for Python libraries that expect process environment variables.
+- Added `run-app.sh` Unix-style launcher mirroring the Windows launcher.
+- Added `README.md` with setup, configuration, usage, USDA update behavior, development commands, and ignored generated files.
 
 ## In Progress
 
@@ -55,3 +59,6 @@ Implementation has started from an empty repository. The product specification l
 - After USDA downloader implementation: `.venv\Scripts\python.exe -m pytest` passed with 7 tests.
 - After USDA downloader implementation: `.venv\Scripts\python.exe -m compileall app tests` passed.
 - Confirmed `http://127.0.0.1:8000/` no longer responds after stopping the dev server.
+- After `.env` process-environment update: `.venv\Scripts\python.exe -m pytest` passed with 8 tests.
+- After `.env` process-environment update: `.venv\Scripts\python.exe -m compileall app tests` passed.
+- Confirmed configured `.env` values are visible through `load_settings()` and `os.environ` without printing secrets.
