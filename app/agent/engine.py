@@ -54,6 +54,9 @@ class NutritionAgent:
         )
         result = agent.invoke({"messages": [{"role": "user", "content": message}]})
         response = _extract_last_message(result)
+        calculation_result = _extract_last_tool_result(result, "calculate_total_nutrition")
+        if isinstance(calculation_result, dict):
+            response = _format_calculation_response(calculation_result)
         return {"response": response, "tool_activity": _extract_tool_activity(result), "raw": result}
 
 
@@ -91,6 +94,23 @@ def _extract_tool_activity(result: Any) -> list[str]:
             activity.append(summary)
 
     return activity
+
+
+def _extract_last_tool_result(result: Any, tool_name: str) -> Any:
+    if not isinstance(result, dict):
+        return None
+
+    messages = result.get("messages")
+    if not isinstance(messages, list):
+        return None
+
+    tool_result = None
+    for message in messages:
+        message_tool_name = _message_value(message, "name")
+        if message_tool_name != tool_name:
+            continue
+        tool_result = _parse_tool_content(_message_value(message, "content"))
+    return tool_result
 
 
 def _message_value(message: Any, key: str) -> Any:
@@ -147,6 +167,76 @@ def _format_tool_result(tool_name: str, result: Any) -> str | None:
     return None
 
 
+def _format_calculation_response(result: dict[str, Any]) -> str:
+    ingredients = result.get("ingredients") if isinstance(result.get("ingredients"), list) else []
+    total = result.get("total") if isinstance(result.get("total"), dict) else {}
+    per_100g = result.get("per_100g") if isinstance(result.get("per_100g"), dict) else {}
+    total_weight = result.get("total_weight_grams")
+    warnings = result.get("warnings") if isinstance(result.get("warnings"), list) else []
+
+    lines = ["## Nutrition calculation"]
+    if isinstance(total_weight, (int, float)):
+        lines.append(f"Total weight: **{_format_number(float(total_weight))} g**")
+
+    lines.extend(
+        [
+            "",
+            "### Total",
+            f"- Calories: **{_format_nutrient_amount(total, 'Energy') or 'not available'}**",
+            f"- Protein: **{_format_nutrient_amount(total, 'Protein') or 'not available'}**",
+            f"- Fat: **{_format_nutrient_amount(total, 'Total lipid (fat)') or 'not available'}**",
+            f"- Carbs: **{_format_nutrient_amount(total, 'Carbohydrate, by difference') or 'not available'}**",
+        ]
+    )
+
+    if per_100g:
+        lines.extend(
+            [
+                "",
+                "### Per 100 g",
+                f"- Calories: **{_format_nutrient_amount(per_100g, 'Energy') or 'not available'}**",
+                f"- Protein: **{_format_nutrient_amount(per_100g, 'Protein') or 'not available'}**",
+                f"- Fat: **{_format_nutrient_amount(per_100g, 'Total lipid (fat)') or 'not available'}**",
+                f"- Carbs: **{_format_nutrient_amount(per_100g, 'Carbohydrate, by difference') or 'not available'}**",
+            ]
+        )
+
+    if ingredients:
+        lines.extend(
+            [
+                "",
+                "### By ingredient",
+                "| Ingredient | Weight (g) | Calories | Protein (g) | Fat (g) | Carbs (g) |",
+                "| --- | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for ingredient in ingredients:
+            if not isinstance(ingredient, dict):
+                continue
+            nutrition = ingredient.get("nutrition") if isinstance(ingredient.get("nutrition"), dict) else {}
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        _format_table_cell(ingredient.get("input_name") or ingredient.get("resolved_name") or "ingredient"),
+                        _format_optional_number(ingredient.get("grams")),
+                        _format_nutrient_number(nutrition, "Energy"),
+                        _format_nutrient_number(nutrition, "Protein"),
+                        _format_nutrient_number(nutrition, "Total lipid (fat)"),
+                        _format_nutrient_number(nutrition, "Carbohydrate, by difference"),
+                    ]
+                )
+                + " |"
+            )
+
+    if warnings:
+        lines.append("")
+        lines.append("Warnings:")
+        lines.extend(f"- {warning}" for warning in warnings)
+
+    return "\n".join(lines)
+
+
 def _format_percent(value: Any) -> str:
     if not isinstance(value, (int, float)):
         return ""
@@ -163,5 +253,25 @@ def _format_nutrient_amount(total: dict[str, Any], nutrient_name: str) -> str | 
     if not isinstance(amount, (int, float)):
         return None
 
-    display_amount = round(float(amount), 2)
-    return f"{display_amount:g} {unit or ''}".strip()
+    return f"{_format_number(float(amount))} {unit or ''}".strip()
+
+
+def _format_nutrient_number(nutrition: dict[str, Any], nutrient_name: str) -> str:
+    nutrient = nutrition.get(nutrient_name)
+    if not isinstance(nutrient, dict):
+        return "-"
+    return _format_optional_number(nutrient.get("amount"))
+
+
+def _format_optional_number(value: Any) -> str:
+    if not isinstance(value, (int, float)):
+        return "-"
+    return _format_number(float(value))
+
+
+def _format_number(value: float) -> str:
+    return f"{round(value, 2):g}"
+
+
+def _format_table_cell(value: Any) -> str:
+    return str(value).replace("|", "\\|").replace("\r", " ").replace("\n", " ")

@@ -14,6 +14,7 @@ class NutritionCalculator:
     def calculate_total_nutrition(self, ingredients: list[dict[str, Any]], servings: float | None = None) -> dict[str, Any]:
         ingredient_rows: list[dict[str, Any]] = []
         totals: dict[str, dict[str, float | str | None]] = {}
+        total_weight_grams = 0.0
         warnings: list[str] = []
 
         for ingredient in ingredients:
@@ -48,6 +49,7 @@ class NutritionCalculator:
 
             nutrition: dict[str, dict[str, float | str | None]] = {}
             if conversion.grams is not None:
+                total_weight_grams = round(total_weight_grams + conversion.grams, 4)
                 for nutrient_name, nutrient in match["nutrients_per_100g"].items():
                     amount = nutrient.get("amount")
                     if amount is None:
@@ -86,9 +88,21 @@ class NutritionCalculator:
                 for name, nutrient in totals.items()
             }
 
+        per_100g = None
+        if total_weight_grams > 0:
+            per_100g = {
+                name: {
+                    "amount": round(float(nutrient["amount"] or 0) / total_weight_grams * 100, 4),
+                    "unit": nutrient.get("unit"),
+                }
+                for name, nutrient in totals.items()
+            }
+
         return {
             "ingredients": ingredient_rows,
+            "total_weight_grams": total_weight_grams,
             "total": totals,
+            "per_100g": per_100g,
             "per_serving": per_serving,
             "warnings": warnings,
         }

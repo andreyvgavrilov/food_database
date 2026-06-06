@@ -29,7 +29,7 @@ def build_agent_tools(database_path: Path):
         ingredients: list[dict[str, Any]],
         servings: float | None = None,
     ) -> dict[str, Any]:
-        """Calculate per-ingredient, total, and optional per-serving nutrition for a recipe."""
+        """Calculate per-ingredient, total, per-100g, and optional per-serving nutrition for a recipe."""
         connection = connect(database_path)
         try:
             return NutritionCalculator(connection).calculate_total_nutrition(ingredients, servings)

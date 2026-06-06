@@ -141,6 +141,9 @@ def test_calculate_total_nutrition(tmp_path):
 
     assert result["ingredients"][0]["grams"] == 13.5
     assert result["ingredients"][1]["grams"] == 200
+    assert result["total_weight_grams"] == 213.5
     assert result["total"]["Energy"]["amount"] == 449.34
+    assert result["per_100g"]["Energy"]["amount"] == 210.4637
+    assert result["per_100g"]["Protein"]["amount"] == 29.0398
     assert result["per_serving"]["Energy"]["amount"] == 224.67
     assert result["total"]["Protein"]["amount"] == 62
