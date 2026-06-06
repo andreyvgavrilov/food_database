@@ -3,11 +3,10 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from app.db import initialize_database
+from app.db import initialize_database, record_import_started, update_import_status
 from app.usda.normalize import normalize_search_text
 
 
@@ -30,10 +29,6 @@ class ImportResult:
     nutrients_imported: int
     portions_imported: int
     error_message: str | None = None
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _json_files(path: Path) -> list[Path]:
@@ -131,29 +126,26 @@ def _to_float(value: Any) -> float | None:
         return None
 
 
-def import_usda_dump(connection: sqlite3.Connection, source_path: Path) -> ImportResult:
+def import_usda_dump(connection: sqlite3.Connection, source_path: Path, import_id: int | None = None) -> ImportResult:
     initialize_database(connection)
     files = _json_files(source_path)
-    started_at = _now()
     source_version = _source_version(files)
 
-    cursor = connection.execute(
-        """
-        INSERT INTO import_status (source_name, source_path, source_version, started_at, status)
-        VALUES (?, ?, ?, ?, ?)
-        """,
-        (SOURCE_NAME, str(source_path), source_version, started_at, "running"),
-    )
-    import_id = int(cursor.lastrowid)
-    connection.commit()
+    if import_id is None:
+        import_id = record_import_started(connection, SOURCE_NAME, str(source_path), source_version)
+    else:
+        update_import_status(
+            connection,
+            import_id,
+            "running",
+            source_path=str(source_path),
+            source_version=source_version,
+            error_message=None,
+        )
 
     if not files:
         error = f"No JSON files found at {source_path}"
-        connection.execute(
-            "UPDATE import_status SET completed_at = ?, status = ?, error_message = ? WHERE id = ?",
-            (_now(), "failed", error, import_id),
-        )
-        connection.commit()
+        update_import_status(connection, import_id, "failed", error_message=error, completed=True)
         return ImportResult("failed", 0, 0, 0, error)
 
     foods_imported = 0
@@ -258,16 +250,8 @@ def import_usda_dump(connection: sqlite3.Connection, source_path: Path) -> Impor
                         )
                         portions_imported += 1
 
-        connection.execute(
-            "UPDATE import_status SET completed_at = ?, status = ? WHERE id = ?",
-            (_now(), "completed", import_id),
-        )
-        connection.commit()
+        update_import_status(connection, import_id, "completed", completed=True)
         return ImportResult("completed", foods_imported, len(nutrients_imported), portions_imported)
     except Exception as exc:
-        connection.execute(
-            "UPDATE import_status SET completed_at = ?, status = ?, error_message = ? WHERE id = ?",
-            (_now(), "failed", str(exc), import_id),
-        )
-        connection.commit()
+        update_import_status(connection, import_id, "failed", error_message=str(exc), completed=True)
         return ImportResult("failed", foods_imported, len(nutrients_imported), portions_imported, str(exc))

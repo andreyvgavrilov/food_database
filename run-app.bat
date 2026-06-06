@@ -43,7 +43,7 @@ if not exist ".env" (
 echo Starting AI Nutrition Agent at %APP_URL%
 echo Close this window or press Ctrl+C to stop the app.
 
-start "" powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 3; Start-Process '%APP_URL%'"
+start /b "" "%PYTHON_EXE%" -c "import time, webbrowser; time.sleep(3); webbrowser.open(r'%APP_URL%')"
 
 "%PYTHON_EXE%" -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 

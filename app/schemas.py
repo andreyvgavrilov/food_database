@@ -28,4 +28,5 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     response: str
+    tool_activity: list[str] = Field(default_factory=list)
     raw: Any | None = None

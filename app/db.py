@@ -84,8 +84,11 @@ CREATE INDEX IF NOT EXISTS idx_aliases_normalized_name ON ingredient_aliases(nor
 
 def connect(database_path: Path) -> sqlite3.Connection:
     database_path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(database_path, check_same_thread=False)
+    connection = sqlite3.connect(database_path, check_same_thread=False, timeout=60)
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA busy_timeout = 60000")
+    connection.execute("PRAGMA journal_mode = WAL")
+    connection.execute("PRAGMA synchronous = NORMAL")
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
 
@@ -115,19 +118,58 @@ def latest_import_status(connection: sqlite3.Connection) -> dict[str, object] | 
     return dict(row) if row else None
 
 
+def record_import_started(
+    connection: sqlite3.Connection,
+    source_name: str,
+    source_path: str,
+    source_version: str | None = None,
+    status: str = "running",
+) -> int:
+    now = datetime.now(timezone.utc).isoformat()
+    cursor = connection.execute(
+        """
+        INSERT INTO import_status
+          (source_name, source_path, source_version, started_at, status)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (source_name, source_path, source_version, now, status),
+    )
+    connection.commit()
+    return int(cursor.lastrowid)
+
+
+def update_import_status(
+    connection: sqlite3.Connection,
+    import_id: int,
+    status: str,
+    *,
+    source_path: str | None = None,
+    source_version: str | None = None,
+    error_message: str | None = None,
+    completed: bool = False,
+) -> None:
+    completed_at = datetime.now(timezone.utc).isoformat() if completed else None
+    connection.execute(
+        """
+        UPDATE import_status
+        SET
+          source_path = COALESCE(?, source_path),
+          source_version = COALESCE(?, source_version),
+          completed_at = ?,
+          status = ?,
+          error_message = ?
+        WHERE id = ?
+        """,
+        (source_path, source_version, completed_at, status, error_message, import_id),
+    )
+    connection.commit()
+
+
 def record_import_failure(
     connection: sqlite3.Connection,
     source_name: str,
     source_path: str,
     error_message: str,
 ) -> None:
-    now = datetime.now(timezone.utc).isoformat()
-    connection.execute(
-        """
-        INSERT INTO import_status
-          (source_name, source_path, source_version, started_at, completed_at, status, error_message)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (source_name, source_path, "download-failed", now, now, "failed", error_message),
-    )
-    connection.commit()
+    import_id = record_import_started(connection, source_name, source_path, "download-failed")
+    update_import_status(connection, import_id, "failed", error_message=error_message, completed=True)

@@ -28,6 +28,10 @@ Implementation has started from an empty repository. The product specification l
 - Updated config loading so `.env` values are read into app settings and loaded into `os.environ` for Python libraries that expect process environment variables.
 - Added `run-app.sh` Unix-style launcher mirroring the Windows launcher.
 - Added `README.md` with setup, configuration, usage, USDA update behavior, development commands, and ignored generated files.
+- Changed the manual USDA update flow to record a `downloading` import status before the first network request, keep one status row through download/import completion or failure, and poll status from the settings page after the button is clicked.
+- Added manual USDA import endpoint tests for the pre-download status transition and duplicate-job prevention.
+- Configured SQLite connections for app concurrency with WAL mode, a 60-second busy timeout, and normal synchronous writes so status polling and long imports do not immediately fail with `database is locked`.
+- Changed request handlers and Deep Agents nutrition tools to use short-lived SQLite connections instead of sharing one app-level connection across FastAPI requests and agent tool execution.
 
 ## In Progress
 
@@ -62,3 +66,9 @@ Implementation has started from an empty repository. The product specification l
 - After `.env` process-environment update: `.venv\Scripts\python.exe -m pytest` passed with 8 tests.
 - After `.env` process-environment update: `.venv\Scripts\python.exe -m compileall app tests` passed.
 - Confirmed configured `.env` values are visible through `load_settings()` and `os.environ` without printing secrets.
+- After manual USDA update status fixes: `.venv\Scripts\python.exe -m pytest` passed with 10 tests.
+- After manual USDA update status fixes: `.venv\Scripts\python.exe -m compileall app tests` passed.
+- After SQLite lock handling fix: `.venv\Scripts\python.exe -m pytest` passed with 11 tests.
+- After SQLite lock handling fix: `.venv\Scripts\python.exe -m compileall app tests` passed.
+- After chat/tool SQLite connection isolation fix: `.venv\Scripts\python.exe -m pytest` passed with 12 tests.
+- After chat/tool SQLite connection isolation fix: `.venv\Scripts\python.exe -m compileall app tests` passed.

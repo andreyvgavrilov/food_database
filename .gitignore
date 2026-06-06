@@ -3,6 +3,5 @@ __pycache__/
 .pytest_cache/
 .venv/
 .env
-data/*.sqlite
-data/*.sqlite-*
+data/
 server*.log
