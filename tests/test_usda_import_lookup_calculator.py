@@ -147,3 +147,35 @@ def test_calculate_total_nutrition(tmp_path):
     assert result["per_100g"]["Protein"]["amount"] == 29.0398
     assert result["per_serving"]["Energy"]["amount"] == 224.67
     assert result["total"]["Protein"]["amount"] == 62
+
+
+def test_calculate_total_nutrition_accepts_agent_argument_aliases(tmp_path):
+    fixture_path = tmp_path / "usda"
+    _write_fixture(fixture_path)
+    db = _connection(tmp_path)
+    import_usda_dump(db, fixture_path)
+
+    result = NutritionCalculator(db).calculate_total_nutrition(
+        [
+            {"ingredient_name": "olive oil", "grams": 13.5},
+            {"input_name": "chicken breast", "amount": 200, "unit": "g"},
+        ]
+    )
+
+    assert result["warnings"] == []
+    assert result["ingredients"][0]["input_name"] == "olive oil"
+    assert result["ingredients"][1]["input_name"] == "chicken breast"
+    assert result["total_weight_grams"] == 213.5
+    assert result["total"]["Energy"]["amount"] == 449.34
+    assert result["per_100g"]["Energy"]["amount"] == 210.4637
+
+
+def test_calculate_total_nutrition_reports_missing_names_without_lookup(tmp_path):
+    db = _connection(tmp_path)
+
+    result = NutritionCalculator(db).calculate_total_nutrition([{"quantity": 100, "unit": "gram"}])
+
+    assert result["warnings"] == ["Ingredient name is missing."]
+    assert result["ingredients"][0]["warnings"] == ["Ingredient name is missing."]
+    assert result["ingredients"][0]["input_name"] == ""
+    assert result["total"] == {}
