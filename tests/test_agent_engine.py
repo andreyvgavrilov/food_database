@@ -1,4 +1,4 @@
-from app.agent.engine import _extract_tool_activity, _format_calculation_response
+from app.agent.engine import _detect_response_language, _extract_tool_activity, _format_calculation_response
 
 
 def test_extract_tool_activity_formats_lookup_result():
@@ -89,3 +89,55 @@ def test_format_calculation_response_uses_tool_totals_and_per_100g():
     assert "- Calories: **449.34 kcal**" in response
     assert "- Calories: **210.46 kcal**" in response
     assert "| olive oil | 13.5 | 119.34 | 0 | 13.5 | - |" in response
+
+
+def test_format_calculation_response_preserves_russian_request_language():
+    response = _format_calculation_response(
+        {
+            "ingredients": [{"input_name": "egg", "grams": 100, "nutrition": {"Energy": {"amount": 143, "unit": "kcal"}}}],
+            "total_weight_grams": 100,
+            "total": {"Energy": {"amount": 143, "unit": "kcal"}},
+            "per_100g": {"Energy": {"amount": 143, "unit": "kcal"}},
+        },
+        language=_detect_response_language("посчитай калории"),
+    )
+
+    assert "## Расчет питания" in response
+    assert "### На 100 г" in response
+    assert "| Ингредиент | Вес (г) | Калории | Белки (г) | Жиры (г) | Углеводы (г) |" in response
+
+
+def test_extract_tool_activity_preserves_russian_request_language():
+    result = {
+        "messages": [
+            {
+                "type": "tool",
+                "name": "get_ingredient_nutrition",
+                "content": '{"ingredient_name":"egg","matches":[]}',
+            }
+        ]
+    }
+
+    assert _extract_tool_activity(result, language="ru") == [
+        "Проверен ингредиент **egg**, но соответствие USDA не найдено."
+    ]
+
+
+def test_extract_tool_activity_shows_normalized_lookup_name():
+    result = {
+        "messages": [
+            {
+                "type": "tool",
+                "name": "get_ingredient_nutrition",
+                "content": {
+                    "ingredient_name": "olive oil",
+                    "original_ingredient_name": "sitan sir",
+                    "matches": [{"description": "Oil, olive, salad or cooking", "confidence": 0.9}],
+                },
+            }
+        ]
+    }
+
+    assert _extract_tool_activity(result) == [
+        "Looked up **sitan sir** (as **olive oil**) and matched **Oil, olive, salad or cooking** (90% confidence)."
+    ]

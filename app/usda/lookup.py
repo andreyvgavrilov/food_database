@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 from app.usda.normalize import normalize_search_text
 
@@ -66,7 +66,7 @@ class IngredientLookup:
         normalized: str,
         preferred_food_category: str | None,
         max_results: int,
-    ) -> list[sqlite3.Row]:
+    ) -> list[Mapping[str, Any]]:
         alias_row = self.connection.execute(
             """
             SELECT foods.fdc_id, foods.description, foods.search_name, ingredient_aliases.confidence
@@ -83,50 +83,64 @@ class IngredientLookup:
             return [alias_row]
 
         terms = [term for term in normalized.split() if term]
-        like_all_terms = " AND ".join(["foods.search_name LIKE ?"] * len(terms))
-        params: list[object] = [f"%{term}%" for term in terms]
+        term_variants = [sorted(_term_variants(term)) for term in terms]
+        token_match_clauses = [
+            "(" + " OR ".join(["(' ' || foods.search_name || ' ') LIKE ?"] * len(variants)) + ")"
+            for variants in term_variants
+        ]
+        token_match_where = " AND ".join(token_match_clauses)
 
         category_join = ""
-        category_score = "0"
         if preferred_food_category:
             category_join = "LEFT JOIN food_categories ON food_categories.id = foods.food_category_id"
-            category_score = "CASE WHEN food_categories.description LIKE ? THEN 0.05 ELSE 0 END"
-            params.insert(0, f"%{preferred_food_category}%")
 
-        if like_all_terms:
-            where = f"({like_all_terms})"
+        if token_match_where:
+            where = f"({token_match_where})"
         else:
             where = "1 = 0"
 
         query_params: list[object] = []
-        if preferred_food_category:
-            query_params.append(f"%{preferred_food_category}%")
-        query_params.extend([normalized, f"%{normalized}%"])
-        query_params.extend([f"%{term}%" for term in terms])
-        query_params.append(max_results)
+        for variants in term_variants:
+            query_params.extend([f"% {variant} %" for variant in variants])
+        query_params.append(max(max_results * 20, max_results))
 
         rows = self.connection.execute(
             f"""
             SELECT
               foods.fdc_id,
               foods.description,
-              foods.search_name,
-              CASE
-                WHEN foods.search_name = ? THEN 1.0
-                WHEN foods.search_name LIKE ? THEN 0.9
-                ELSE 0.72
-              END + {category_score} AS confidence
+              foods.search_name
+              {", food_categories.description AS category_description" if preferred_food_category else ""}
             FROM foods
             {category_join}
             WHERE {where}
-            ORDER BY confidence DESC, LENGTH(foods.description), foods.description
+            ORDER BY LENGTH(foods.description), foods.description
             LIMIT ?
             """,
             query_params,
         ).fetchall()
-        return rows
+        ranked_rows = []
+        for row in rows:
+            confidence = _search_confidence(normalized, terms, str(row["search_name"] or ""))
+            if confidence is None:
+                continue
+            if preferred_food_category:
+                category_description = str(row["category_description"] or "")
+                if preferred_food_category.lower() in category_description.lower():
+                    confidence += 0.05
+            ranked_rows.append(
+                {
+                    "fdc_id": row["fdc_id"],
+                    "description": row["description"],
+                    "search_name": row["search_name"],
+                    "confidence": confidence,
+                }
+            )
 
-    def _hydrate_match(self, row: sqlite3.Row) -> NutritionMatch:
+        ranked_rows.sort(key=lambda row: (-float(row["confidence"]), len(str(row["description"])), str(row["description"])))
+        return ranked_rows[:max_results]
+
+    def _hydrate_match(self, row: Mapping[str, Any]) -> NutritionMatch:
         nutrient_rows = self.connection.execute(
             """
             SELECT nutrients.name, nutrients.unit_name, food_nutrients.amount
@@ -172,3 +186,40 @@ class IngredientLookup:
             nutrients_per_100g=nutrients,
             portion_conversions=portions,
         )
+
+
+def _search_confidence(normalized_query: str, terms: list[str], search_name: str) -> float | None:
+    if not terms:
+        return None
+    if search_name == normalized_query:
+        return 1.0
+    if _contains_token_phrase(search_name.split(), normalized_query.split()):
+        return 0.95
+    if all(_term_matches_token(term, search_name.split()) for term in terms):
+        return 0.86
+    return None
+
+
+def _contains_token_phrase(tokens: list[str], query_tokens: list[str]) -> bool:
+    if not query_tokens or len(query_tokens) > len(tokens):
+        return False
+    phrase_length = len(query_tokens)
+    return any(tokens[index : index + phrase_length] == query_tokens for index in range(len(tokens) - phrase_length + 1))
+
+
+def _term_matches_token(term: str, tokens: list[str]) -> bool:
+    variants = _term_variants(term)
+    return any(token in variants or (len(term) >= 4 and any(token.startswith(variant) for variant in variants)) for token in tokens)
+
+
+def _term_variants(term: str) -> set[str]:
+    variants = {term}
+    if term.endswith("ies") and len(term) > 3:
+        variants.add(term[:-3] + "y")
+    if term.endswith("y") and len(term) > 3:
+        variants.add(term[:-1] + "ies")
+    if term.endswith("s") and len(term) > 3:
+        variants.add(term[:-1])
+    else:
+        variants.add(term + "s")
+    return variants

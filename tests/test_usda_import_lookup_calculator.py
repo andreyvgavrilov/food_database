@@ -112,6 +112,52 @@ def test_import_usda_dump_and_lookup(tmp_path):
     assert lookup["matches"][0]["portion_conversions"][0]["gram_weight"] == 13.5
 
 
+def test_lookup_uses_token_match_not_substring_match(tmp_path):
+    fixture_path = tmp_path / "usda"
+    fixture_path.mkdir()
+    payload = {
+        "FoundationFoods": [
+            {
+                "fdcId": 100,
+                "description": "Eggnog",
+                "foodNutrients": [
+                    {
+                        "nutrient": {
+                            "id": 1008,
+                            "number": "208",
+                            "name": "Energy",
+                            "unitName": "kcal",
+                        },
+                        "amount": 88,
+                    }
+                ],
+            },
+            {
+                "fdcId": 200,
+                "description": "Egg, whole, raw, fresh",
+                "foodNutrients": [
+                    {
+                        "nutrient": {
+                            "id": 1008,
+                            "number": "208",
+                            "name": "Energy",
+                            "unitName": "kcal",
+                        },
+                        "amount": 143,
+                    }
+                ],
+            },
+        ]
+    }
+    (fixture_path / "foundation.json").write_text(json.dumps(payload), encoding="utf-8")
+    db = _connection(tmp_path)
+    import_usda_dump(db, fixture_path)
+
+    lookup = IngredientLookup(db).get_ingredient_nutrition("egg", max_results=5)
+
+    assert [match["fdc_id"] for match in lookup["matches"]] == [200]
+
+
 def test_convert_to_grams_from_metric_and_portion():
     assert convert_to_grams(2, "kilogram", []).grams == 2000
 
