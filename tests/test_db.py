@@ -3,7 +3,11 @@ from app.db import connect, initialize_database
 
 
 def test_connect_configures_sqlite_for_concurrent_app_access(tmp_path):
-    connection = connect(tmp_path / "nutrition.sqlite")
+    database_path = tmp_path / "nutrition.sqlite"
+
+    assert not database_path.exists()
+
+    connection = connect(database_path)
 
     try:
         journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
@@ -15,6 +19,7 @@ def test_connect_configures_sqlite_for_concurrent_app_access(tmp_path):
     assert journal_mode.lower() == "wal"
     assert busy_timeout == 60000
     assert foreign_keys == 1
+    assert database_path.exists()
 
 
 def test_chat_history_persists_threads_and_messages(tmp_path):

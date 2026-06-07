@@ -2,8 +2,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.config import load_settings
-from app.db import connect, initialize_database, latest_import_status
+from app.db import connect, initialize_database, latest_import_status, record_import_started, update_import_status
 from app.usda.downloader import DownloadResult
+from app.usda.importer import SOURCE_NAME
 from app.web import routes
 from app.web.routes import create_router
 
@@ -22,6 +23,11 @@ def _test_app(tmp_path, monkeypatch):
     app = FastAPI()
     app.include_router(create_router(settings, connection))
     return app, connection
+
+
+def _mark_successful_import(connection):
+    import_id = record_import_started(connection, SOURCE_NAME, "/tmp/usda-fixture")
+    update_import_status(connection, import_id, "completed", completed=True)
 
 
 def test_manual_import_records_downloading_before_download(tmp_path, monkeypatch):
@@ -53,14 +59,30 @@ def test_chat_page_contains_history_loader_and_composer(tmp_path, monkeypatch):
     assert 'id="newChatButton"' in response.text
     assert 'class="spinner"' in response.text
     assert "renderMarkdown" in response.text
-    assert "renderTable" in response.text
-    assert "formatInlineMath" in response.text
+    assert "wrapRenderedTables" in response.text
+    assert "marked.umd.js" in response.text
+    assert "purify.min.js" in response.text
+    assert "tex-mml-chtml.js" in response.text
+    assert "MathJax.typesetPromise" in response.text
+    assert "formatInlineMath" not in response.text
     assert "Tool activity" not in response.text
     assert response.text.index('id="history"') < response.text.index('id="message"')
 
 
-def test_chat_endpoint_returns_tool_activity(tmp_path, monkeypatch):
+def test_chat_page_disables_composer_until_usda_import_completes(tmp_path, monkeypatch):
     app, _connection = _test_app(tmp_path, monkeypatch)
+
+    response = TestClient(app).get("/")
+
+    assert response.status_code == 200
+    assert "Nutrition database setup is required before chat can answer questions." in response.text
+    assert '<textarea id="message" placeholder="Paste a recipe or ask about ingredients" disabled>' in response.text
+    assert '<button id="sendButton" type="submit" disabled>Send</button>' in response.text
+
+
+def test_chat_endpoint_returns_tool_activity(tmp_path, monkeypatch):
+    app, connection = _test_app(tmp_path, monkeypatch)
+    _mark_successful_import(connection)
     observed_calls = []
 
     class FakeNutritionAgent:
@@ -86,7 +108,8 @@ def test_chat_endpoint_returns_tool_activity(tmp_path, monkeypatch):
 
 
 def test_chat_endpoint_reuses_chat_and_passes_history(tmp_path, monkeypatch):
-    app, _connection = _test_app(tmp_path, monkeypatch)
+    app, connection = _test_app(tmp_path, monkeypatch)
+    _mark_successful_import(connection)
     observed_calls = []
 
     class FakeNutritionAgent:
@@ -118,7 +141,8 @@ def test_chat_endpoint_reuses_chat_and_passes_history(tmp_path, monkeypatch):
 
 
 def test_chat_history_endpoints_list_and_load_previous_chats(tmp_path, monkeypatch):
-    app, _connection = _test_app(tmp_path, monkeypatch)
+    app, connection = _test_app(tmp_path, monkeypatch)
+    _mark_successful_import(connection)
 
     class FakeNutritionAgent:
         def __init__(self, settings, db):
@@ -158,6 +182,26 @@ def test_chat_history_endpoints_list_and_load_previous_chats(tmp_path, monkeypat
             "created_at": messages_response.json()["messages"][1]["created_at"],
         },
     ]
+
+
+def test_chat_endpoint_rejects_messages_until_usda_import_completes(tmp_path, monkeypatch):
+    app, _connection = _test_app(tmp_path, monkeypatch)
+
+    class FailingNutritionAgent:
+        def __init__(self, settings, db):
+            pass
+
+        def invoke(self, message, history=None):
+            raise AssertionError("chat should not invoke the agent before nutrition data is imported")
+
+    monkeypatch.setattr(routes, "NutritionAgent", FailingNutritionAgent)
+
+    response = TestClient(app).post("/api/chat", json={"message": "100g egg"})
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == (
+        "Nutrition data has not been imported yet. Open Settings and update the nutrition database."
+    )
 
 
 def test_manual_import_endpoint_prevents_duplicate_jobs(tmp_path, monkeypatch):

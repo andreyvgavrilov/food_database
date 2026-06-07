@@ -18,7 +18,14 @@ from app.chat.history import (
     list_chat_threads,
 )
 from app.config import Settings
-from app.db import connect, initialize_database, latest_import_status, record_import_started, update_import_status
+from app.db import (
+    connect,
+    has_successful_import,
+    initialize_database,
+    latest_import_status,
+    record_import_started,
+    update_import_status,
+)
 from app.nutrition.calculator import NutritionCalculator
 from app.schemas import ChatRequest, ChatResponse, IngredientLookupRequest, NutritionCalculationRequest
 from app.usda.downloader import download_usda_json_dump
@@ -27,6 +34,7 @@ from app.usda.lookup import IngredientLookup
 
 
 import_lock = threading.Lock()
+CHAT_UNAVAILABLE_DETAIL = "Nutrition data has not been imported yet. Open Settings and update the nutrition database."
 
 
 def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRouter:
@@ -41,6 +49,25 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
 
     @router.get("/", response_class=HTMLResponse)
     def index() -> str:
+        status_connection = connect(settings.database_path)
+        try:
+            chat_available = has_successful_import(status_connection)
+            status = latest_import_status(status_connection)
+        finally:
+            status_connection.close()
+
+        disabled_attr = "" if chat_available else " disabled"
+        setup_warning = ""
+        if not chat_available:
+            status_text = status["status"] if status else "not imported"
+            setup_warning = f"""
+              <p class="setup-warning">
+                Nutrition database setup is required before chat can answer questions.
+                Current status: <strong>{escape(str(status_text))}</strong>.
+                <a href="/settings">Open Settings</a> and update the nutrition database.
+              </p>
+            """
+
         return """
         <!doctype html>
         <html>
@@ -79,6 +106,14 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
 
               nav a { margin-right: 1rem; color: var(--primary-dark); }
               h1 { margin: 0; font-size: 1.7rem; }
+
+              .setup-warning {
+                margin: 0;
+                padding: 0.8rem 1rem;
+                border: 1px solid #d6b656;
+                background: #fff7df;
+                color: #533f04;
+              }
 
               .chat {
                 display: grid;
@@ -330,6 +365,7 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
             <div class="page">
               <nav><a href="/">Chat</a><a href="/settings">Settings</a></nav>
               <h1>AI Nutrition Agent</h1>
+              __SETUP_WARNING__
               <section class="chat" aria-label="Chat">
                 <aside class="chat-sidebar" aria-label="Saved chats">
                   <button id="newChatButton" type="button">New chat</button>
@@ -341,13 +377,27 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
                   </div>
                   <div class="composer">
                     <form id="chatForm">
-                      <textarea id="message" placeholder="Paste a recipe or ask about ingredients"></textarea>
-                      <button id="sendButton" type="submit">Send</button>
+                      <textarea id="message" placeholder="Paste a recipe or ask about ingredients"__DISABLED_ATTR__></textarea>
+                      <button id="sendButton" type="submit"__DISABLED_ATTR__>Send</button>
                     </form>
                   </div>
                 </div>
               </section>
             </div>
+            <script src="https://cdn.jsdelivr.net/npm/marked/lib/marked.umd.js"></script>
+            <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+            <script>
+              window.MathJax = {
+                tex: {
+                  inlineMath: [['$', '$'], ['\\\\(', '\\\\)']],
+                  processEscapes: true
+                },
+                options: {
+                  skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+                }
+              };
+            </script>
+            <script src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-mml-chtml.js"></script>
             <script>
               const form = document.getElementById('chatForm');
               const textarea = document.getElementById('message');
@@ -355,6 +405,7 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
               const history = document.getElementById('history');
               const chatList = document.getElementById('chatList');
               const newChatButton = document.getElementById('newChatButton');
+              const chatAvailable = __CHAT_AVAILABLE__;
               let emptyState = document.getElementById('emptyState');
               let loadingNode = null;
               let currentChatId = null;
@@ -376,14 +427,16 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
                 currentChatId = null;
                 clearHistory();
                 renderChatList(knownChats);
-                textarea.focus();
+                if (chatAvailable) {
+                  textarea.focus();
+                }
               });
 
               loadChats({selectFirst: true});
 
               async function sendChat() {
                 const message = textarea.value.trim();
-                if (!message || textarea.disabled) {
+                if (!chatAvailable || !message || textarea.disabled) {
                   return;
                 }
 
@@ -412,8 +465,8 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
               }
 
               function setLoading(isLoading) {
-                textarea.disabled = isLoading;
-                button.disabled = isLoading;
+                textarea.disabled = !chatAvailable || isLoading;
+                button.disabled = !chatAvailable || isLoading;
                 button.textContent = isLoading ? 'Sending' : 'Send';
 
                 if (isLoading) {
@@ -428,7 +481,9 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
                   loadingNode.remove();
                   loadingNode = null;
                 }
-                textarea.focus();
+                if (chatAvailable) {
+                  textarea.focus();
+                }
               }
 
               async function loadChats(options) {
@@ -490,6 +545,8 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
 
               function appendAssistantMessage(payload) {
                 const article = appendMessage('assistant', renderMarkdown(payload.response || ''));
+                wrapRenderedTables(article);
+                renderMathIn(article);
                 if (payload.raw) {
                   const details = document.createElement('details');
                   details.className = 'raw';
@@ -512,177 +569,30 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
               }
 
               function renderMarkdown(markdown) {
-                const lines = String(markdown || '').replace(/\\r\\n/g, '\\n').split('\\n');
-                const html = [];
-                let paragraph = [];
-                let listType = null;
-                let inCode = false;
-                let codeLines = [];
-
-                function flushParagraph() {
-                  if (paragraph.length) {
-                    html.push('<p>' + renderInlineMarkdown(paragraph.join(' ')) + '</p>');
-                    paragraph = [];
-                  }
+                const source = String(markdown || '');
+                if (!window.marked || !window.DOMPurify) {
+                  return '<p>' + escapeHtml(source).replace(/\\n/g, '<br>') + '</p>';
                 }
-
-                function closeList() {
-                  if (listType) {
-                    html.push('</' + listType + '>');
-                    listType = null;
-                  }
-                }
-
-                for (let index = 0; index < lines.length; index += 1) {
-                  const line = lines[index];
-                  const trimmed = line.trim();
-
-                  if (trimmed.startsWith('```')) {
-                    if (inCode) {
-                      html.push('<pre><code>' + escapeHtml(codeLines.join('\\n')) + '</code></pre>');
-                      codeLines = [];
-                      inCode = false;
-                    } else {
-                      flushParagraph();
-                      closeList();
-                      inCode = true;
-                    }
-                    continue;
-                  }
-
-                  if (inCode) {
-                    codeLines.push(line);
-                    continue;
-                  }
-
-                  if (!trimmed) {
-                    flushParagraph();
-                    closeList();
-                    continue;
-                  }
-
-                  if (isTableHeader(lines, index)) {
-                    flushParagraph();
-                    closeList();
-                    const table = collectTable(lines, index);
-                    html.push(renderTable(table.lines));
-                    index = table.endIndex;
-                    continue;
-                  }
-
-                  const heading = trimmed.match(/^(#{1,3})\\s+(.+)$/);
-                  if (heading) {
-                    flushParagraph();
-                    closeList();
-                    const level = heading[1].length;
-                    html.push('<h' + level + '>' + renderInlineMarkdown(heading[2]) + '</h' + level + '>');
-                    continue;
-                  }
-
-                  const unordered = trimmed.match(/^[-*]\\s+(.+)$/);
-                  const ordered = trimmed.match(/^\\d+\\.\\s+(.+)$/);
-                  if (unordered || ordered) {
-                    flushParagraph();
-                    const nextListType = unordered ? 'ul' : 'ol';
-                    if (listType !== nextListType) {
-                      closeList();
-                      html.push('<' + nextListType + '>');
-                      listType = nextListType;
-                    }
-                    html.push('<li>' + renderInlineMarkdown((unordered || ordered)[1]) + '</li>');
-                    continue;
-                  }
-
-                  paragraph.push(trimmed);
-                }
-
-                if (inCode) {
-                  html.push('<pre><code>' + escapeHtml(codeLines.join('\\n')) + '</code></pre>');
-                }
-                flushParagraph();
-                closeList();
-                return html.join('');
+                const dirty = marked.parse(source, {gfm: true, breaks: true});
+                return DOMPurify.sanitize(dirty);
               }
 
-              function renderInlineMarkdown(text) {
-                let html = escapeHtml(text);
-                html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-                html = html.replace(/\\[([^\\]]+)\\]\\((https?:\\/\\/[^\\s)]+)\\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-                html = html.replace(/\\$([^$]+)\\$/g, (_match, expression) => '<span class="math">' + formatInlineMath(expression) + '</span>');
-                html = html.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
-                html = html.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
-                return html;
-              }
-
-              function isTableHeader(lines, index) {
-                const current = lines[index] ? lines[index].trim() : '';
-                const next = lines[index + 1] ? lines[index + 1].trim() : '';
-                return isTableRow(current) && isTableSeparator(next);
-              }
-
-              function collectTable(lines, startIndex) {
-                const tableLines = [lines[startIndex].trim(), lines[startIndex + 1].trim()];
-                let endIndex = startIndex + 1;
-                for (let index = startIndex + 2; index < lines.length; index += 1) {
-                  const trimmed = lines[index].trim();
-                  if (!isTableRow(trimmed) || isTableSeparator(trimmed)) {
-                    break;
+              function wrapRenderedTables(root) {
+                root.querySelectorAll('table').forEach((table) => {
+                  if (table.parentElement && table.parentElement.classList.contains('table-wrap')) {
+                    return;
                   }
-                  tableLines.push(trimmed);
-                  endIndex = index;
-                }
-                return { lines: tableLines, endIndex };
-              }
-
-              function renderTable(tableLines) {
-                const headers = parseTableRow(tableLines[0]);
-                const alignments = parseTableRow(tableLines[1]).map((cell) => {
-                  const trimmed = cell.trim();
-                  if (trimmed.startsWith(':') && trimmed.endsWith(':')) {
-                    return 'center';
-                  }
-                  if (trimmed.endsWith(':')) {
-                    return 'right';
-                  }
-                  return 'left';
+                  const wrapper = document.createElement('div');
+                  wrapper.className = 'table-wrap';
+                  table.parentNode.insertBefore(wrapper, table);
+                  wrapper.appendChild(table);
                 });
-                const rows = tableLines.slice(2).map(parseTableRow);
-                const headerHtml = headers.map((header, index) => (
-                  '<th style="text-align: ' + (alignments[index] || 'left') + '">' + renderInlineMarkdown(header) + '</th>'
-                )).join('');
-                const rowHtml = rows.map((row) => (
-                  '<tr>' + row.map((cell, index) => (
-                    '<td style="text-align: ' + (alignments[index] || 'left') + '">' + renderInlineMarkdown(cell) + '</td>'
-                  )).join('') + '</tr>'
-                )).join('');
-                return '<div class="table-wrap"><table><thead><tr>' + headerHtml + '</tr></thead><tbody>' + rowHtml + '</tbody></table></div>';
               }
 
-              function parseTableRow(line) {
-                return line
-                  .replace(/^\\|/, '')
-                  .replace(/\\|$/, '')
-                  .split('|')
-                  .map((cell) => cell.trim());
-              }
-
-              function isTableRow(line) {
-                return /^\\|.*\\|$/.test(line) && line.split('|').length > 2;
-              }
-
-              function isTableSeparator(line) {
-                return /^\\|?\\s*:?-{3,}:?\\s*(\\|\\s*:?-{3,}:?\\s*)+\\|?$/.test(line);
-              }
-
-              function formatInlineMath(expression) {
-                return expression
-                  .replace(/\\\\approx/g, '&asymp;')
-                  .replace(/\\\\times/g, '&times;')
-                  .replace(/\\\\pm/g, '&plusmn;')
-                  .replace(/\\\\cdot/g, '&middot;')
-                  .replace(/[{}]/g, '')
-                  .replace(/\\\\/g, '')
-                  .trim();
+              function renderMathIn(root) {
+                if (window.MathJax && MathJax.typesetPromise) {
+                  MathJax.typesetPromise([root]).catch(() => {});
+                }
               }
 
               function escapeHtml(value) {
@@ -696,7 +606,10 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
             </script>
           </body>
         </html>
-        """
+        """.replace("__SETUP_WARNING__", setup_warning).replace("__DISABLED_ATTR__", disabled_attr).replace(
+            "__CHAT_AVAILABLE__",
+            str(chat_available).lower(),
+        )
 
     @router.get("/settings", response_class=HTMLResponse)
     def settings_page() -> str:
@@ -779,6 +692,9 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
 
     @router.post("/api/chat", response_model=ChatResponse)
     def chat(request: ChatRequest, db: sqlite3.Connection = Depends(get_connection)) -> dict[str, Any]:
+        if not has_successful_import(db):
+            raise HTTPException(status_code=503, detail=CHAT_UNAVAILABLE_DETAIL)
+
         if request.chat_id is None:
             chat_id = create_chat_thread(db, title=_chat_title(request.message))
             previous_messages: list[dict[str, Any]] = []
