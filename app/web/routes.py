@@ -349,14 +349,6 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
 
               function appendAssistantMessage(payload) {
                 const article = appendMessage('assistant', renderMarkdown(payload.response || ''));
-                if (Array.isArray(payload.tool_activity) && payload.tool_activity.length) {
-                  const activity = document.createElement('div');
-                  activity.className = 'tool-activity';
-                  activity.innerHTML = '<div class="tool-activity-title">Tool activity</div>' +
-                    '<ul>' + payload.tool_activity.map((item) => '<li>' + renderInlineMarkdown(item) + '</li>').join('') + '</ul>';
-                  article.appendChild(activity);
-                }
-
                 if (payload.raw) {
                   const details = document.createElement('details');
                   details.className = 'raw';

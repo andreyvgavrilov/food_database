@@ -23,6 +23,24 @@ PRIORITY_NUTRIENTS = {
     "Iron, Fe",
 }
 
+GENERIC_SINGLE_FOOD_DESCRIPTORS = {
+    "all",
+    "boiled",
+    "cooked",
+    "dry",
+    "dried",
+    "fresh",
+    "frozen",
+    "large",
+    "plain",
+    "raw",
+    "regular",
+    "ripe",
+    "small",
+    "unspecified",
+    "whole",
+}
+
 
 @dataclass(frozen=True)
 class NutritionMatch:
@@ -191,13 +209,28 @@ class IngredientLookup:
 def _search_confidence(normalized_query: str, terms: list[str], search_name: str) -> float | None:
     if not terms:
         return None
+    search_tokens = search_name.split()
+    query_tokens = normalized_query.split()
     if search_name == normalized_query:
         return 1.0
-    if _contains_token_phrase(search_name.split(), normalized_query.split()):
-        return 0.95
-    if all(_term_matches_token(term, search_name.split()) for term in terms):
+    if _contains_token_phrase(search_tokens, query_tokens):
+        confidence = 0.95
+        if len(query_tokens) == 1:
+            confidence += _single_ingredient_match_adjustment(query_tokens[0], search_tokens)
+        return max(0.0, min(confidence, 0.99))
+    if all(_term_matches_token(term, search_tokens) for term in terms):
         return 0.86
     return None
+
+
+def _single_ingredient_match_adjustment(query_token: str, search_tokens: list[str]) -> float:
+    if not search_tokens:
+        return 0.0
+    if search_tokens[0] != query_token:
+        return -0.07
+    if any(token in GENERIC_SINGLE_FOOD_DESCRIPTORS for token in search_tokens[1:]):
+        return 0.04
+    return 0.01
 
 
 def _contains_token_phrase(tokens: list[str], query_tokens: list[str]) -> bool:

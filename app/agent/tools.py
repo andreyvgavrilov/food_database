@@ -8,6 +8,7 @@ from app.config import Settings
 from app.db import connect
 from app.nutrition.calculator import NutritionCalculator
 from app.usda.lookup import IngredientLookup
+from app.usda.normalize import normalize_search_text
 
 
 def build_agent_tools(settings_or_database_path: Settings | Path):
@@ -28,7 +29,13 @@ def build_agent_tools(settings_or_database_path: Settings | Path):
                     [{"name": ingredient_name, "quantity": 100, "unit": "gram"}]
                 )
                 if normalized and normalized[0].get("name"):
-                    normalized_ingredient_name = str(normalized[0]["name"])
+                    candidate_name = str(normalized[0]["name"])
+                    normalized_ingredient_name = _safe_normalized_name(ingredient_name, candidate_name)
+                    if normalized_ingredient_name != candidate_name:
+                        normalization_warning = (
+                            f"Ingredient normalization returned broader name '{candidate_name}', "
+                            f"using submitted name '{ingredient_name}'."
+                        )
             except Exception as exc:
                 normalization_warning = f"Ingredient normalization unavailable, using submitted name: {exc}"
 
@@ -51,11 +58,18 @@ def build_agent_tools(settings_or_database_path: Settings | Path):
         ingredients: list[dict[str, Any]],
         servings: float | None = None,
     ) -> dict[str, Any]:
-        """Calculate per-ingredient, total, per-100g, and optional per-serving nutrition for a recipe."""
+        """Calculate per-ingredient, total, per-100g, and optional per-serving nutrition for a recipe.
+
+        Pass the original user ingredient names and quantities. This tool normalizes non-English,
+        transliterated, and regional ingredient names internally before USDA lookup.
+        """
         normalization_warning = None
         if settings:
             try:
-                ingredients = IngredientNormalizer(settings).normalize(ingredients)
+                normalized_ingredients = IngredientNormalizer(settings).normalize(ingredients)
+                ingredients, broadening_warnings = _safe_normalized_ingredients(ingredients, normalized_ingredients)
+                if broadening_warnings:
+                    normalization_warning = " ".join(broadening_warnings)
             except Exception as exc:
                 normalization_warning = f"Ingredient normalization unavailable, using submitted names: {exc}"
 
@@ -69,3 +83,43 @@ def build_agent_tools(settings_or_database_path: Settings | Path):
             connection.close()
 
     return [get_ingredient_nutrition, calculate_total_nutrition]
+
+
+def _safe_normalized_ingredients(
+    original_ingredients: list[dict[str, Any]],
+    normalized_ingredients: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    safe_ingredients: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for index, normalized_ingredient in enumerate(normalized_ingredients):
+        original_ingredient = original_ingredients[index] if index < len(original_ingredients) else {}
+        original_name = _ingredient_name(original_ingredient)
+        candidate_name = _ingredient_name(normalized_ingredient)
+        if original_name and candidate_name:
+            safe_name = _safe_normalized_name(original_name, candidate_name)
+            if safe_name != candidate_name:
+                normalized_ingredient = {**normalized_ingredient, "name": safe_name, "original_name": original_name}
+                warnings.append(
+                    f"Ingredient normalization returned broader name '{candidate_name}', "
+                    f"using submitted name '{original_name}'."
+                )
+        safe_ingredients.append(normalized_ingredient)
+    return safe_ingredients, warnings
+
+
+def _safe_normalized_name(original_name: str, candidate_name: str) -> str:
+    original_terms = set(normalize_search_text(original_name).split())
+    candidate_terms = set(normalize_search_text(candidate_name).split())
+    if not original_terms or not candidate_terms:
+        return candidate_name
+    if original_terms < candidate_terms:
+        return original_name
+    return candidate_name
+
+
+def _ingredient_name(ingredient: dict[str, Any]) -> str:
+    for key in ("name", "ingredient_name", "input_name", "standard_english_name", "original_name", "description"):
+        value = ingredient.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""

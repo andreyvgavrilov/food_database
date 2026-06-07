@@ -8,12 +8,19 @@ from typing import Any
 from app.config import Settings
 
 
-NORMALIZATION_PROMPT = """Convert recipe ingredients to standard English names.
+NORMALIZATION_PROMPT = """Convert recipe ingredients to standard English names for USDA FoodData Central lookup.
 Return JSON only, with this shape:
 [
   {"original_name": "...", "standard_english_name": "...", "quantity": 1, "unit": "gram"}
 ]
-Preserve numeric quantities and units when present. Do not add commentary.
+Preserve numeric quantities and units when present.
+Translate non-English, transliterated, and regional ingredient names to the closest common USDA-searchable English food identity. If there is no exact direct representation, choose the closest generic food, not a branded or compound prepared dish.
+Do not add unrelated product words: "egg" stays "egg", never "bread egg".
+Examples:
+- "sitan sir" -> "cottage cheese"
+- "tomates" -> "tomato"
+- "huile d'olive" -> "olive oil"
+Do not add commentary.
 """
 
 
@@ -47,10 +54,38 @@ class OllamaClient:
         content = data.get("message", {}).get("content")
         if not content:
             raise RuntimeError("Ollama response did not include message content")
+        return _parse_json_content(str(content))
+
+
+def _parse_json_content(content: str) -> Any:
+    for candidate in _json_candidates(content):
         try:
-            return json.loads(content)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"Ollama returned invalid JSON: {content}") from exc
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    raise RuntimeError(f"Ollama returned invalid JSON: {content}")
+
+
+def _json_candidates(content: str) -> list[str]:
+    stripped = content.strip()
+    candidates = [stripped]
+    if stripped.startswith("```"):
+        lines = stripped.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        fenced = "\n".join(lines).strip()
+        if fenced:
+            candidates.append(fenced)
+
+    for opener, closer in (("[", "]"), ("{", "}")):
+        start = stripped.find(opener)
+        end = stripped.rfind(closer)
+        if start != -1 and end > start:
+            candidates.append(stripped[start : end + 1])
+
+    return candidates
 
 
 class IngredientNormalizer:
@@ -58,7 +93,7 @@ class IngredientNormalizer:
         self.client = OllamaClient(settings)
 
     def normalize(self, ingredients: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        prompt = json.dumps(ingredients, ensure_ascii=True)
+        prompt = json.dumps(ingredients, ensure_ascii=False)
         normalized = self.client.chat_json(NORMALIZATION_PROMPT, prompt)
         if not isinstance(normalized, list):
             raise RuntimeError("Ingredient normalization did not return a JSON array")

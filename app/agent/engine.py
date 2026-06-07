@@ -2,11 +2,26 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import asdict, is_dataclass
 from typing import Any
 
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.tools import build_agent_tools
 from app.config import Settings
+
+
+DEEPAGENTS_BUILT_IN_TOOLS = frozenset(
+    {
+        "write_todos",
+        "ls",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "glob",
+        "grep",
+        "execute",
+    }
+)
 
 
 class NutritionAgent:
@@ -16,7 +31,12 @@ class NutritionAgent:
 
     def invoke(self, message: str) -> dict[str, Any]:
         try:
-            from deepagents import create_deep_agent
+            from deepagents import (
+                GeneralPurposeSubagentProfile,
+                HarnessProfile,
+                create_deep_agent,
+                register_harness_profile,
+            )
         except Exception as exc:
             return {
                 "response": (
@@ -47,6 +67,14 @@ class NutritionAgent:
             temperature=0,
         )
 
+        register_harness_profile(
+            "ollama",
+            HarnessProfile(
+                excluded_tools=DEEPAGENTS_BUILT_IN_TOOLS,
+                general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
+            ),
+        )
+
         agent = create_deep_agent(
             model=model,
             tools=build_agent_tools(self.settings),
@@ -55,10 +83,11 @@ class NutritionAgent:
         result = agent.invoke({"messages": [{"role": "user", "content": message}]})
         language = _detect_response_language(message)
         response = _extract_last_message(result)
-        calculation_result = _extract_last_tool_result(result, "calculate_total_nutrition")
-        if isinstance(calculation_result, dict):
-            response = _format_calculation_response(calculation_result, language=language)
-        return {"response": response, "tool_activity": _extract_tool_activity(result, language=language), "raw": result}
+        return {
+            "response": response,
+            "tool_activity": _extract_tool_activity(result, language=language),
+            "raw": _json_safe(result),
+        }
 
 
 def _extract_last_message(result: Any) -> str:
@@ -95,23 +124,6 @@ def _extract_tool_activity(result: Any, language: str = "en") -> list[str]:
             activity.append(summary)
 
     return activity
-
-
-def _extract_last_tool_result(result: Any, tool_name: str) -> Any:
-    if not isinstance(result, dict):
-        return None
-
-    messages = result.get("messages")
-    if not isinstance(messages, list):
-        return None
-
-    tool_result = None
-    for message in messages:
-        message_tool_name = _message_value(message, "name")
-        if message_tool_name != tool_name:
-            continue
-        tool_result = _parse_tool_content(_message_value(message, "content"))
-    return tool_result
 
 
 def _message_value(message: Any, key: str) -> Any:
@@ -344,3 +356,25 @@ def _format_number(value: float) -> str:
 
 def _format_table_cell(value: Any) -> str:
     return str(value).replace("|", "\\|").replace("\r", " ").replace("\n", " ")
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    if is_dataclass(value) and not isinstance(value, type):
+        return _json_safe(asdict(value))
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        try:
+            return _json_safe(model_dump(mode="json"))
+        except TypeError:
+            return _json_safe(model_dump())
+    try:
+        json.dumps(value)
+        return value
+    except TypeError:
+        return str(value)

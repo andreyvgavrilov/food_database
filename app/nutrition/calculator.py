@@ -19,6 +19,7 @@ class NutritionCalculator:
 
         for ingredient in ingredients:
             name = _ingredient_name(ingredient)
+            original_name = _ingredient_original_name(ingredient)
             quantity, unit = _ingredient_quantity_and_unit(ingredient)
             if not name:
                 warning = "Ingredient name is missing."
@@ -42,18 +43,19 @@ class NutritionCalculator:
             if not lookup_result["matches"]:
                 warning = f"No USDA match found for '{name}'."
                 warnings.append(warning)
-                ingredient_rows.append(
-                    {
-                        "input_name": name,
-                        "resolved_name": None,
-                        "fdc_id": None,
-                        "quantity": quantity,
-                        "unit": unit,
-                        "grams": None,
-                        "nutrition": {},
-                        "warnings": [warning],
-                    }
-                )
+                row = {
+                    "input_name": name,
+                    "resolved_name": None,
+                    "fdc_id": None,
+                    "quantity": quantity,
+                    "unit": unit,
+                    "grams": None,
+                    "nutrition": {},
+                    "warnings": [warning],
+                }
+                if original_name and original_name != name:
+                    row["original_name"] = original_name
+                ingredient_rows.append(row)
                 continue
 
             match = lookup_result["matches"][0]
@@ -81,18 +83,19 @@ class NutritionCalculator:
                     )
                     total["amount"] = round(float(total["amount"] or 0) + scaled_amount, 4)
 
-            ingredient_rows.append(
-                {
-                    "input_name": name,
-                    "resolved_name": match["description"],
-                    "fdc_id": match["fdc_id"],
-                    "quantity": quantity,
-                    "unit": unit,
-                    "grams": round(conversion.grams, 4) if conversion.grams is not None else None,
-                    "nutrition": nutrition,
-                    "warnings": row_warnings,
-                }
-            )
+            row = {
+                "input_name": name,
+                "resolved_name": match["description"],
+                "fdc_id": match["fdc_id"],
+                "quantity": quantity,
+                "unit": unit,
+                "grams": round(conversion.grams, 4) if conversion.grams is not None else None,
+                "nutrition": nutrition,
+                "warnings": row_warnings,
+            }
+            if original_name and original_name != name:
+                row["original_name"] = original_name
+            ingredient_rows.append(row)
 
         per_serving = None
         if servings and servings > 0:
@@ -137,6 +140,13 @@ def _ingredient_name(ingredient: dict[str, Any]) -> str:
         value = ingredient.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
+    return ""
+
+
+def _ingredient_original_name(ingredient: dict[str, Any]) -> str:
+    value = ingredient.get("original_name")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
     return ""
 
 

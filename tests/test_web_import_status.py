@@ -53,6 +53,7 @@ def test_chat_page_contains_history_loader_and_composer(tmp_path, monkeypatch):
     assert "renderMarkdown" in response.text
     assert "renderTable" in response.text
     assert "formatInlineMath" in response.text
+    assert "Tool activity" not in response.text
     assert response.text.index('id="history"') < response.text.index('id="message"')
 
 
