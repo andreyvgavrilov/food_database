@@ -5,6 +5,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from app.agent.interaction_logs import InteractionLogger
 from app.config import Settings
 
 
@@ -27,6 +28,7 @@ Do not add commentary.
 class OllamaClient:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self.logger = InteractionLogger(settings.interaction_logs_path)
 
     def chat_json(self, system_prompt: str, user_prompt: str) -> Any:
         url = self.settings.ollama_base_url.rstrip("/") + "/api/chat"
@@ -49,12 +51,83 @@ class OllamaClient:
             with urllib.request.urlopen(request, timeout=self.settings.ollama_timeout_seconds) as response:
                 data = json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            self.logger.write(
+                "llm",
+                "ollama.chat_json",
+                {
+                    "request": _loggable_request(
+                        settings=self.settings,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        format="json",
+                    ),
+                    "error": str(exc),
+                },
+            )
             raise RuntimeError(f"Ollama request failed: {exc}") from exc
 
         content = data.get("message", {}).get("content")
         if not content:
+            self.logger.write(
+                "llm",
+                "ollama.chat_json",
+                {
+                    "request": _loggable_request(
+                        settings=self.settings,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        format="json",
+                    ),
+                    "raw_response": data,
+                    "error": "Ollama response did not include message content",
+                },
+            )
             raise RuntimeError("Ollama response did not include message content")
-        return _parse_json_content(str(content))
+        try:
+            parsed = _parse_json_content(str(content))
+        except RuntimeError as exc:
+            self.logger.write(
+                "llm",
+                "ollama.chat_json",
+                {
+                    "request": _loggable_request(
+                        settings=self.settings,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        format="json",
+                    ),
+                    "raw_response": data,
+                    "error": str(exc),
+                },
+            )
+            raise
+        self.logger.write(
+            "llm",
+            "ollama.chat_json",
+            {
+                "request": _loggable_request(
+                    settings=self.settings,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    format="json",
+                ),
+                "raw_response": data,
+                "parsed_response": parsed,
+            },
+        )
+        return parsed
+
+
+def _loggable_request(settings: Settings, system_prompt: str, user_prompt: str, format: str) -> dict[str, Any]:
+    return {
+        "url": settings.ollama_base_url.rstrip("/") + "/api/chat",
+        "model": settings.ollama_model,
+        "timeout_seconds": settings.ollama_timeout_seconds,
+        "has_api_key": bool(settings.ollama_api_key),
+        "format": format,
+        "system_prompt": system_prompt,
+        "user_prompt": user_prompt,
+    }
 
 
 def _parse_json_content(content: str) -> Any:

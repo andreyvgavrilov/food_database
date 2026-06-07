@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
+from app.agent.interaction_logs import InteractionLogger
 from app.config import load_settings
 from app.db import connect, has_successful_import, initialize_database
 from app.usda.importer import import_usda_dump
@@ -14,6 +15,7 @@ connection = connect(settings.database_path)
 
 def create_app() -> FastAPI:
     app = FastAPI(title="AI Nutrition Agent")
+    InteractionLogger(settings.interaction_logs_path).prune_old_logs()
     initialize_database(connection)
     if settings.auto_import_usda_on_first_run and not has_successful_import(connection):
         if settings.usda_json_dump_path.exists():

@@ -35,6 +35,7 @@ def _bool(value: str | bool | None, default: bool = False) -> bool:
 class Settings:
     app_env: str
     database_url: str
+    interaction_logs_path: Path
     ollama_base_url: str
     ollama_model: str
     ollama_api_key: str | None
@@ -82,6 +83,10 @@ def load_settings(env: Mapping[str, str] | None = None, env_file: Path | None = 
     if not dump_path.is_absolute():
         dump_path = ROOT_DIR / dump_path
 
+    logs_path = Path(env_values.get("INTERACTION_LOGS_PATH", "./logs"))
+    if not logs_path.is_absolute():
+        logs_path = ROOT_DIR / logs_path
+
     data_types = tuple(
         item.strip()
         for item in env_values.get("USDA_DOWNLOAD_DATA_TYPES", "Foundation Foods,SR Legacy,FNDDS").split(",")
@@ -91,6 +96,7 @@ def load_settings(env: Mapping[str, str] | None = None, env_file: Path | None = 
     return Settings(
         app_env=env_values.get("APP_ENV", "development"),
         database_url=env_values.get("DATABASE_URL", "sqlite:///./data/nutrition.sqlite"),
+        interaction_logs_path=logs_path,
         ollama_base_url=env_values.get("OLLAMA_BASE_URL", "http://localhost:11434"),
         ollama_model=env_values.get("OLLAMA_MODEL", "llama3.1"),
         ollama_api_key=env_values.get("OLLAMA_API_KEY") or None,

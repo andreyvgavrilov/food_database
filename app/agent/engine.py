@@ -5,6 +5,7 @@ import sqlite3
 from dataclasses import asdict, is_dataclass
 from typing import Any
 
+from app.agent.interaction_logs import InteractionLogger
 from app.agent.prompts import SYSTEM_PROMPT
 from app.agent.tools import build_agent_tools
 from app.config import Settings
@@ -28,6 +29,7 @@ class NutritionAgent:
     def __init__(self, settings: Settings, connection: sqlite3.Connection):
         self.settings = settings
         self.connection = connection
+        self.logger = InteractionLogger(settings.interaction_logs_path)
 
     def invoke(self, message: str) -> dict[str, Any]:
         try:
@@ -38,6 +40,14 @@ class NutritionAgent:
                 register_harness_profile,
             )
         except Exception as exc:
+            self.logger.write(
+                "llm",
+                "deepagents.import",
+                {
+                    "request": {"message": message, "model": self.settings.ollama_model},
+                    "error": str(exc),
+                },
+            )
             return {
                 "response": (
                     "Deep Agents is not installed or could not be imported. "
@@ -50,6 +60,14 @@ class NutritionAgent:
         try:
             from langchain_ollama import ChatOllama
         except Exception as exc:
+            self.logger.write(
+                "llm",
+                "langchain_ollama.import",
+                {
+                    "request": {"message": message, "model": self.settings.ollama_model},
+                    "error": str(exc),
+                },
+            )
             return {
                 "response": "The langchain-ollama package is required for Deep Agents to use Ollama.",
                 "tool_activity": [],
@@ -80,9 +98,42 @@ class NutritionAgent:
             tools=build_agent_tools(self.settings),
             system_prompt=SYSTEM_PROMPT,
         )
-        result = agent.invoke({"messages": [{"role": "user", "content": message}]})
+        payload = {"messages": [{"role": "user", "content": message}]}
+        try:
+            result = agent.invoke(payload)
+        except Exception as exc:
+            self.logger.write(
+                "llm",
+                "deepagents.invoke",
+                {
+                    "request": {
+                        "message": message,
+                        "model": self.settings.ollama_model,
+                        "base_url": self.settings.ollama_base_url,
+                        "has_api_key": bool(self.settings.ollama_api_key),
+                        "payload": payload,
+                    },
+                    "error": str(exc),
+                },
+            )
+            raise
         language = _detect_response_language(message)
         response = _extract_last_message(result)
+        self.logger.write(
+            "llm",
+            "deepagents.invoke",
+            {
+                "request": {
+                    "message": message,
+                    "model": self.settings.ollama_model,
+                    "base_url": self.settings.ollama_base_url,
+                    "has_api_key": bool(self.settings.ollama_api_key),
+                    "payload": payload,
+                },
+                "response": _json_safe(result),
+                "final_response": response,
+            },
+        )
         return {
             "response": response,
             "tool_activity": _extract_tool_activity(result, language=language),

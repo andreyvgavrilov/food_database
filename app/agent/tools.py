@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from app.agent.interaction_logs import InteractionLogger
 from app.agent.ollama import IngredientNormalizer
 from app.config import Settings
 from app.db import connect
@@ -14,6 +15,7 @@ from app.usda.normalize import normalize_search_text
 def build_agent_tools(settings_or_database_path: Settings | Path):
     settings = settings_or_database_path if isinstance(settings_or_database_path, Settings) else None
     database_path = settings.database_path if settings else settings_or_database_path
+    logger = InteractionLogger(settings.interaction_logs_path) if settings else None
 
     def get_ingredient_nutrition(
         ingredient_name: str,
@@ -21,38 +23,48 @@ def build_agent_tools(settings_or_database_path: Settings | Path):
         max_results: int = 5,
     ) -> dict[str, Any]:
         """Get USDA nutrition data and portion conversions for one standard English ingredient."""
+        input_payload = {
+            "ingredient_name": ingredient_name,
+            "preferred_food_category": preferred_food_category,
+            "max_results": max_results,
+        }
         normalized_ingredient_name = ingredient_name
         normalization_warning = None
-        if settings:
-            try:
-                normalized = IngredientNormalizer(settings).normalize(
-                    [{"name": ingredient_name, "quantity": 100, "unit": "gram"}]
-                )
-                if normalized and normalized[0].get("name"):
-                    candidate_name = str(normalized[0]["name"])
-                    normalized_ingredient_name = _safe_normalized_name(ingredient_name, candidate_name)
-                    if normalized_ingredient_name != candidate_name:
-                        normalization_warning = (
-                            f"Ingredient normalization returned broader name '{candidate_name}', "
-                            f"using submitted name '{ingredient_name}'."
-                        )
-            except Exception as exc:
-                normalization_warning = f"Ingredient normalization unavailable, using submitted name: {exc}"
-
-        connection = connect(database_path)
         try:
-            result = IngredientLookup(connection).get_ingredient_nutrition(
-                normalized_ingredient_name,
-                preferred_food_category,
-                max_results,
-            )
-            if normalized_ingredient_name != ingredient_name:
-                result["original_ingredient_name"] = ingredient_name
-            if normalization_warning:
-                result["warnings"] = [normalization_warning]
-            return result
-        finally:
-            connection.close()
+            if settings:
+                try:
+                    normalized = IngredientNormalizer(settings).normalize(
+                        [{"name": ingredient_name, "quantity": 100, "unit": "gram"}]
+                    )
+                    if normalized and normalized[0].get("name"):
+                        candidate_name = str(normalized[0]["name"])
+                        normalized_ingredient_name = _safe_normalized_name(ingredient_name, candidate_name)
+                        if normalized_ingredient_name != candidate_name:
+                            normalization_warning = (
+                                f"Ingredient normalization returned broader name '{candidate_name}', "
+                                f"using submitted name '{ingredient_name}'."
+                            )
+                except Exception as exc:
+                    normalization_warning = f"Ingredient normalization unavailable, using submitted name: {exc}"
+
+            connection = connect(database_path)
+            try:
+                result = IngredientLookup(connection).get_ingredient_nutrition(
+                    normalized_ingredient_name,
+                    preferred_food_category,
+                    max_results,
+                )
+                if normalized_ingredient_name != ingredient_name:
+                    result["original_ingredient_name"] = ingredient_name
+                if normalization_warning:
+                    result["warnings"] = [normalization_warning]
+                _log_tool(logger, "get_ingredient_nutrition", input_payload, result)
+                return result
+            finally:
+                connection.close()
+        except Exception as exc:
+            _log_tool(logger, "get_ingredient_nutrition", input_payload, error=str(exc))
+            raise
 
     def calculate_total_nutrition(
         ingredients: list[dict[str, Any]],
@@ -63,26 +75,49 @@ def build_agent_tools(settings_or_database_path: Settings | Path):
         Pass the original user ingredient names and quantities. This tool normalizes non-English,
         transliterated, and regional ingredient names internally before USDA lookup.
         """
+        input_payload = {"ingredients": ingredients, "servings": servings}
         normalization_warning = None
-        if settings:
-            try:
-                normalized_ingredients = IngredientNormalizer(settings).normalize(ingredients)
-                ingredients, broadening_warnings = _safe_normalized_ingredients(ingredients, normalized_ingredients)
-                if broadening_warnings:
-                    normalization_warning = " ".join(broadening_warnings)
-            except Exception as exc:
-                normalization_warning = f"Ingredient normalization unavailable, using submitted names: {exc}"
-
-        connection = connect(database_path)
         try:
-            result = NutritionCalculator(connection).calculate_total_nutrition(ingredients, servings)
-            if normalization_warning:
-                result["warnings"].insert(0, normalization_warning)
-            return result
-        finally:
-            connection.close()
+            if settings:
+                try:
+                    normalized_ingredients = IngredientNormalizer(settings).normalize(ingredients)
+                    ingredients, broadening_warnings = _safe_normalized_ingredients(ingredients, normalized_ingredients)
+                    if broadening_warnings:
+                        normalization_warning = " ".join(broadening_warnings)
+                except Exception as exc:
+                    normalization_warning = f"Ingredient normalization unavailable, using submitted names: {exc}"
+
+            connection = connect(database_path)
+            try:
+                result = NutritionCalculator(connection).calculate_total_nutrition(ingredients, servings)
+                if normalization_warning:
+                    result["warnings"].insert(0, normalization_warning)
+                _log_tool(logger, "calculate_total_nutrition", input_payload, result)
+                return result
+            finally:
+                connection.close()
+        except Exception as exc:
+            _log_tool(logger, "calculate_total_nutrition", input_payload, error=str(exc))
+            raise
 
     return [get_ingredient_nutrition, calculate_total_nutrition]
+
+
+def _log_tool(
+    logger: InteractionLogger | None,
+    name: str,
+    input_payload: dict[str, Any],
+    output: dict[str, Any] | None = None,
+    error: str | None = None,
+) -> None:
+    if not logger:
+        return
+    payload: dict[str, Any] = {"input": input_payload}
+    if output is not None:
+        payload["output"] = output
+    if error is not None:
+        payload["error"] = error
+    logger.write("tool", name, payload)
 
 
 def _safe_normalized_ingredients(
