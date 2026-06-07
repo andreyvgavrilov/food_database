@@ -49,6 +49,8 @@ def test_chat_page_contains_history_loader_and_composer(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     assert 'id="history"' in response.text
+    assert 'id="chatList"' in response.text
+    assert 'id="newChatButton"' in response.text
     assert 'class="spinner"' in response.text
     assert "renderMarkdown" in response.text
     assert "renderTable" in response.text
@@ -59,12 +61,14 @@ def test_chat_page_contains_history_loader_and_composer(tmp_path, monkeypatch):
 
 def test_chat_endpoint_returns_tool_activity(tmp_path, monkeypatch):
     app, _connection = _test_app(tmp_path, monkeypatch)
+    observed_calls = []
 
     class FakeNutritionAgent:
         def __init__(self, settings, db):
             pass
 
-        def invoke(self, message):
+        def invoke(self, message, history=None):
+            observed_calls.append({"message": message, "history": history})
             return {
                 "response": "Done",
                 "tool_activity": ["Looked up **olive oil**."],
@@ -76,7 +80,84 @@ def test_chat_endpoint_returns_tool_activity(tmp_path, monkeypatch):
     response = TestClient(app).post("/api/chat", json={"message": "olive oil"})
 
     assert response.status_code == 200
+    assert response.json()["chat_id"] > 0
     assert response.json()["tool_activity"] == ["Looked up **olive oil**."]
+    assert observed_calls == [{"message": "olive oil", "history": []}]
+
+
+def test_chat_endpoint_reuses_chat_and_passes_history(tmp_path, monkeypatch):
+    app, _connection = _test_app(tmp_path, monkeypatch)
+    observed_calls = []
+
+    class FakeNutritionAgent:
+        def __init__(self, settings, db):
+            pass
+
+        def invoke(self, message, history=None):
+            observed_calls.append({"message": message, "history": history})
+            return {"response": f"Answer to {message}", "tool_activity": [], "raw": None}
+
+    monkeypatch.setattr(routes, "NutritionAgent", FakeNutritionAgent)
+    client = TestClient(app)
+
+    first = client.post("/api/chat", json={"message": "100g egg"}).json()
+    second_response = client.post(
+        "/api/chat",
+        json={"chat_id": first["chat_id"], "message": "What about per 100g?"},
+    )
+
+    assert second_response.status_code == 200
+    assert second_response.json()["chat_id"] == first["chat_id"]
+    assert observed_calls[1] == {
+        "message": "What about per 100g?",
+        "history": [
+            {"role": "user", "content": "100g egg"},
+            {"role": "assistant", "content": "Answer to 100g egg"},
+        ],
+    }
+
+
+def test_chat_history_endpoints_list_and_load_previous_chats(tmp_path, monkeypatch):
+    app, _connection = _test_app(tmp_path, monkeypatch)
+
+    class FakeNutritionAgent:
+        def __init__(self, settings, db):
+            pass
+
+        def invoke(self, message, history=None):
+            return {"response": "Stored answer", "tool_activity": ["Calculated nutrition."], "raw": {"ok": True}}
+
+    monkeypatch.setattr(routes, "NutritionAgent", FakeNutritionAgent)
+    client = TestClient(app)
+    chat_id = client.post("/api/chat", json={"message": "Lunch recipe"}).json()["chat_id"]
+
+    list_response = client.get("/api/chats")
+    messages_response = client.get(f"/api/chats/{chat_id}/messages")
+
+    assert list_response.status_code == 200
+    assert list_response.json()["chats"][0]["id"] == chat_id
+    assert list_response.json()["chats"][0]["message_count"] == 2
+    assert messages_response.status_code == 200
+    assert messages_response.json()["messages"] == [
+        {
+            "id": messages_response.json()["messages"][0]["id"],
+            "thread_id": chat_id,
+            "role": "user",
+            "content": "Lunch recipe",
+            "tool_activity": [],
+            "raw": None,
+            "created_at": messages_response.json()["messages"][0]["created_at"],
+        },
+        {
+            "id": messages_response.json()["messages"][1]["id"],
+            "thread_id": chat_id,
+            "role": "assistant",
+            "content": "Stored answer",
+            "tool_activity": ["Calculated nutrition."],
+            "raw": {"ok": True},
+            "created_at": messages_response.json()["messages"][1]["created_at"],
+        },
+    ]
 
 
 def test_manual_import_endpoint_prevents_duplicate_jobs(tmp_path, monkeypatch):

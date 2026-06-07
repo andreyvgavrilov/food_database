@@ -73,12 +73,32 @@ CREATE TABLE IF NOT EXISTS ingredient_aliases (
   FOREIGN KEY (fdc_id) REFERENCES foods(fdc_id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS chat_threads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  thread_id INTEGER NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  tool_activity TEXT,
+  raw_json TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_foods_search_name ON foods(search_name);
 CREATE INDEX IF NOT EXISTS idx_foods_description ON foods(description);
 CREATE INDEX IF NOT EXISTS idx_food_nutrients_fdc_id ON food_nutrients(fdc_id);
 CREATE INDEX IF NOT EXISTS idx_food_portions_fdc_id ON food_portions(fdc_id);
 CREATE INDEX IF NOT EXISTS idx_aliases_original_name ON ingredient_aliases(original_name);
 CREATE INDEX IF NOT EXISTS idx_aliases_normalized_name ON ingredient_aliases(normalized_name);
+CREATE INDEX IF NOT EXISTS idx_chat_threads_updated_at ON chat_threads(updated_at);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_id ON chat_messages(thread_id);
 """
 
 

@@ -164,6 +164,52 @@ def test_agent_uses_llm_final_answer_after_tool_calls(monkeypatch, tmp_path):
     assert registered_profiles[0][1].kwargs["general_purpose_subagent"].kwargs["enabled"] is False
 
 
+def test_agent_passes_previous_chat_messages_to_deepagents(monkeypatch, tmp_path):
+    observed_payloads = []
+
+    class FakeChatOllama:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeAgent:
+        def invoke(self, payload):
+            observed_payloads.append(payload)
+            return {"messages": [{"role": "assistant", "content": "Use the same recipe context."}]}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "deepagents",
+        SimpleNamespace(
+            create_deep_agent=lambda **kwargs: FakeAgent(),
+            GeneralPurposeSubagentProfile=lambda **kwargs: SimpleNamespace(kwargs=kwargs),
+            HarnessProfile=lambda **kwargs: SimpleNamespace(kwargs=kwargs),
+            register_harness_profile=lambda key, profile: None,
+        ),
+    )
+    monkeypatch.setitem(sys.modules, "langchain_ollama", SimpleNamespace(ChatOllama=FakeChatOllama))
+
+    settings = load_settings(
+        {
+            "DATABASE_URL": f"sqlite:///{(tmp_path / 'nutrition.sqlite').as_posix()}",
+            "USDA_JSON_DUMP_PATH": str(tmp_path),
+        }
+    )
+
+    NutritionAgent(settings, connection=None).invoke(
+        "What is it per 100g?",
+        history=[
+            {"role": "user", "content": "I used 100g egg and 10g olive oil."},
+            {"role": "assistant", "content": "Here is the total nutrition."},
+        ],
+    )
+
+    assert observed_payloads[0]["messages"] == [
+        {"role": "user", "content": "I used 100g egg and 10g olive oil."},
+        {"role": "assistant", "content": "Here is the total nutrition."},
+        {"role": "user", "content": "What is it per 100g?"},
+    ]
+
+
 def test_agent_returns_json_safe_raw_messages(monkeypatch, tmp_path):
     from langchain_core.messages import AIMessage, ToolMessage
 
@@ -213,3 +259,8 @@ def test_agent_returns_json_safe_raw_messages(monkeypatch, tmp_path):
 def test_system_prompt_requires_calculator_with_original_names_for_recipe_totals():
     assert "calculate_total_nutrition exactly once" in SYSTEM_PROMPT
     assert "original user ingredient names" in SYSTEM_PROMPT
+
+
+def test_system_prompt_requires_per_ingredient_nutrition_in_final_answer():
+    assert "must include per-ingredient nutrition" in SYSTEM_PROMPT
+    assert "one row per ingredient" in SYSTEM_PROMPT

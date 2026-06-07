@@ -23,10 +23,12 @@ class NutritionCalculationRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    chat_id: int | None = Field(default=None, gt=0)
     message: str
 
 
 class ChatResponse(BaseModel):
+    chat_id: int
     response: str
     tool_activity: list[str] = Field(default_factory=list)
     raw: Any | None = None

@@ -10,6 +10,13 @@ from fastapi.responses import HTMLResponse
 
 from app.agent.engine import NutritionAgent
 from app.agent.ollama import IngredientNormalizer
+from app.chat.history import (
+    add_chat_message,
+    create_chat_thread,
+    get_chat_thread,
+    list_chat_messages,
+    list_chat_threads,
+)
 from app.config import Settings
 from app.db import connect, initialize_database, latest_import_status, record_import_started, update_import_status
 from app.nutrition.calculator import NutritionCalculator
@@ -74,11 +81,64 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
               h1 { margin: 0; font-size: 1.7rem; }
 
               .chat {
-                display: flex;
-                flex-direction: column;
+                display: grid;
+                grid-template-columns: 220px minmax(0, 1fr);
                 min-height: calc(100vh - 7rem);
                 border: 1px solid var(--border);
                 background: #ffffff;
+              }
+
+              .chat-sidebar {
+                border-right: 1px solid var(--border);
+                background: var(--panel);
+                padding: 0.75rem;
+                display: flex;
+                flex-direction: column;
+                gap: 0.75rem;
+                min-width: 0;
+              }
+
+              .chat-panel {
+                min-width: 0;
+                display: flex;
+                flex-direction: column;
+              }
+
+              .chat-list {
+                display: flex;
+                flex-direction: column;
+                gap: 0.4rem;
+                overflow-y: auto;
+              }
+
+              .chat-item {
+                width: 100%;
+                border: 1px solid transparent;
+                background: transparent;
+                color: #18202a;
+                padding: 0.55rem 0.6rem;
+                text-align: left;
+                cursor: pointer;
+              }
+
+              .chat-item.active,
+              .chat-item:hover {
+                border-color: var(--border);
+                background: #ffffff;
+              }
+
+              .chat-title {
+                display: block;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+              }
+
+              .chat-count {
+                display: block;
+                color: var(--muted);
+                font-size: 0.8rem;
+                margin-top: 0.2rem;
               }
 
               .history {
@@ -257,6 +317,9 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
               }
 
               @media (max-width: 680px) {
+                .chat { grid-template-columns: 1fr; }
+                .chat-sidebar { border-right: 0; border-bottom: 1px solid var(--border); }
+                .chat-list { max-height: 9rem; }
                 .message { width: 100%; }
                 .composer form { flex-direction: column; align-items: stretch; }
                 button { width: 100%; }
@@ -268,14 +331,20 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
               <nav><a href="/">Chat</a><a href="/settings">Settings</a></nav>
               <h1>AI Nutrition Agent</h1>
               <section class="chat" aria-label="Chat">
-                <div id="history" class="history">
-                  <p id="emptyState" class="empty">Paste a recipe or ask about ingredients.</p>
-                </div>
-                <div class="composer">
-                  <form id="chatForm">
-                    <textarea id="message" placeholder="Paste a recipe or ask about ingredients"></textarea>
-                    <button id="sendButton" type="submit">Send</button>
-                  </form>
+                <aside class="chat-sidebar" aria-label="Saved chats">
+                  <button id="newChatButton" type="button">New chat</button>
+                  <div id="chatList" class="chat-list"></div>
+                </aside>
+                <div class="chat-panel">
+                  <div id="history" class="history">
+                    <p id="emptyState" class="empty">Paste a recipe or ask about ingredients.</p>
+                  </div>
+                  <div class="composer">
+                    <form id="chatForm">
+                      <textarea id="message" placeholder="Paste a recipe or ask about ingredients"></textarea>
+                      <button id="sendButton" type="submit">Send</button>
+                    </form>
+                  </div>
                 </div>
               </section>
             </div>
@@ -284,8 +353,12 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
               const textarea = document.getElementById('message');
               const button = document.getElementById('sendButton');
               const history = document.getElementById('history');
-              const emptyState = document.getElementById('emptyState');
+              const chatList = document.getElementById('chatList');
+              const newChatButton = document.getElementById('newChatButton');
+              let emptyState = document.getElementById('emptyState');
               let loadingNode = null;
+              let currentChatId = null;
+              let knownChats = [];
 
               form.addEventListener('submit', (event) => {
                 event.preventDefault();
@@ -298,6 +371,15 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
                   sendChat();
                 }
               });
+
+              newChatButton.addEventListener('click', () => {
+                currentChatId = null;
+                clearHistory();
+                renderChatList(knownChats);
+                textarea.focus();
+              });
+
+              loadChats({selectFirst: true});
 
               async function sendChat() {
                 const message = textarea.value.trim();
@@ -313,13 +395,15 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
                   const res = await fetch('/api/chat', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({message})
+                    body: JSON.stringify({chat_id: currentChatId, message})
                   });
                   const payload = await res.json();
                   if (!res.ok) {
                     throw new Error(payload.detail || 'Request failed');
                   }
+                  currentChatId = payload.chat_id;
                   appendAssistantMessage(payload);
+                  await loadChats();
                 } catch (error) {
                   appendMessage('assistant', escapeHtml(error.message || 'Something went wrong.'));
                 } finally {
@@ -345,6 +429,63 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
                   loadingNode = null;
                 }
                 textarea.focus();
+              }
+
+              async function loadChats(options) {
+                const res = await fetch('/api/chats');
+                if (!res.ok) {
+                  return;
+                }
+                const payload = await res.json();
+                knownChats = payload.chats || [];
+                renderChatList(knownChats);
+                if (options && options.selectFirst && !currentChatId && knownChats.length) {
+                  await loadChat(knownChats[0].id);
+                }
+              }
+
+              async function loadChat(chatId) {
+                const res = await fetch('/api/chats/' + encodeURIComponent(chatId) + '/messages');
+                if (!res.ok) {
+                  return;
+                }
+                const payload = await res.json();
+                currentChatId = chatId;
+                clearHistory();
+                for (const message of payload.messages || []) {
+                  if (message.role === 'assistant') {
+                    appendAssistantMessage({response: message.content, raw: message.raw});
+                  } else {
+                    appendMessage('user', escapeHtml(message.content || ''));
+                  }
+                }
+                renderChatList(knownChats);
+              }
+
+              function renderChatList(chats) {
+                chatList.innerHTML = '';
+                if (!chats.length) {
+                  const empty = document.createElement('p');
+                  empty.className = 'empty';
+                  empty.textContent = 'No saved chats yet.';
+                  chatList.appendChild(empty);
+                  return;
+                }
+                for (const chat of chats) {
+                  const item = document.createElement('button');
+                  item.type = 'button';
+                  item.className = 'chat-item' + (chat.id === currentChatId ? ' active' : '');
+                  item.innerHTML = '<span class="chat-title"></span><span class="chat-count"></span>';
+                  item.querySelector('.chat-title').textContent = chat.title || 'New chat';
+                  item.querySelector('.chat-count').textContent = (chat.message_count || 0) + ' messages';
+                  item.addEventListener('click', () => loadChat(chat.id));
+                  chatList.appendChild(item);
+                }
+              }
+
+              function clearHistory() {
+                history.innerHTML = '<p id="emptyState" class="empty">Paste a recipe or ask about ingredients.</p>';
+                emptyState = document.getElementById('emptyState');
               }
 
               function appendAssistantMessage(payload) {
@@ -621,9 +762,44 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
         </html>
         """
 
+    @router.get("/api/chats")
+    def chats(db: sqlite3.Connection = Depends(get_connection)) -> dict[str, Any]:
+        return {"chats": list_chat_threads(db)}
+
+    @router.post("/api/chats")
+    def create_chat(db: sqlite3.Connection = Depends(get_connection)) -> dict[str, Any]:
+        chat_id = create_chat_thread(db)
+        return {"chat": get_chat_thread(db, chat_id)}
+
+    @router.get("/api/chats/{chat_id}/messages")
+    def chat_messages(chat_id: int, db: sqlite3.Connection = Depends(get_connection)) -> dict[str, Any]:
+        if not get_chat_thread(db, chat_id):
+            raise HTTPException(status_code=404, detail="Chat not found")
+        return {"messages": list_chat_messages(db, chat_id)}
+
     @router.post("/api/chat", response_model=ChatResponse)
     def chat(request: ChatRequest, db: sqlite3.Connection = Depends(get_connection)) -> dict[str, Any]:
-        return NutritionAgent(settings, db).invoke(request.message)
+        if request.chat_id is None:
+            chat_id = create_chat_thread(db, title=_chat_title(request.message))
+            previous_messages: list[dict[str, Any]] = []
+        else:
+            chat_id = request.chat_id
+            if not get_chat_thread(db, chat_id):
+                raise HTTPException(status_code=404, detail="Chat not found")
+            previous_messages = list_chat_messages(db, chat_id)
+
+        history = _agent_history(previous_messages)
+        add_chat_message(db, chat_id, "user", request.message)
+        result = NutritionAgent(settings, db).invoke(request.message, history=history)
+        add_chat_message(
+            db,
+            chat_id,
+            "assistant",
+            str(result.get("response") or ""),
+            tool_activity=result.get("tool_activity") if isinstance(result.get("tool_activity"), list) else [],
+            raw=result.get("raw"),
+        )
+        return {"chat_id": chat_id, **result}
 
     @router.post("/api/nutrition/lookup")
     def lookup(request: IngredientLookupRequest, db: sqlite3.Connection = Depends(get_connection)) -> dict[str, Any]:
@@ -695,3 +871,20 @@ def create_router(settings: Settings, connection: sqlite3.Connection) -> APIRout
         return {"status": response_status}
 
     return router
+
+
+def _chat_title(message: str) -> str:
+    title = " ".join(message.strip().split())
+    if len(title) <= 48:
+        return title or "New chat"
+    return title[:45].rstrip() + "..."
+
+
+def _agent_history(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    history: list[dict[str, str]] = []
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content")
+        if role in {"user", "assistant"} and isinstance(content, str):
+            history.append({"role": role, "content": content})
+    return history

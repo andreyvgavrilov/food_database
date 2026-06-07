@@ -31,7 +31,7 @@ class NutritionAgent:
         self.connection = connection
         self.logger = InteractionLogger(settings.interaction_logs_path)
 
-    def invoke(self, message: str) -> dict[str, Any]:
+    def invoke(self, message: str, history: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         try:
             from deepagents import (
                 GeneralPurposeSubagentProfile,
@@ -98,7 +98,7 @@ class NutritionAgent:
             tools=build_agent_tools(self.settings),
             system_prompt=SYSTEM_PROMPT,
         )
-        payload = {"messages": [{"role": "user", "content": message}]}
+        payload = {"messages": [*_payload_history(history), {"role": "user", "content": message}]}
         try:
             result = agent.invoke(payload)
         except Exception as exc:
@@ -152,6 +152,20 @@ def _extract_last_message(result: Any) -> str:
             if content:
                 return str(content)
     return str(result)
+
+
+def _payload_history(history: list[dict[str, Any]] | None) -> list[dict[str, str]]:
+    payload_messages: list[dict[str, str]] = []
+    if not history:
+        return payload_messages
+
+    for message in history:
+        role = message.get("role")
+        content = message.get("content")
+        if role not in {"user", "assistant"} or not isinstance(content, str) or not content.strip():
+            continue
+        payload_messages.append({"role": role, "content": content})
+    return payload_messages
 
 
 def _extract_tool_activity(result: Any, language: str = "en") -> list[str]:

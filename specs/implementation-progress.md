@@ -1,6 +1,6 @@
 # Implementation Progress
 
-Last updated: 2026-06-06
+Last updated: 2026-06-07
 
 ## Current State
 
@@ -32,6 +32,8 @@ Implementation has started from an empty repository. The product specification l
 - Added manual USDA import endpoint tests for the pre-download status transition and duplicate-job prevention.
 - Configured SQLite connections for app concurrency with WAL mode, a 60-second busy timeout, and normal synchronous writes so status polling and long imports do not immediately fail with `database is locked`.
 - Changed request handlers and Deep Agents nutrition tools to use short-lived SQLite connections instead of sharing one app-level connection across FastAPI requests and agent tool execution.
+- Added SQLite-backed chat threads and messages, chat history API endpoints, UI chat switching/new-chat controls, and history-aware Deep Agents payloads.
+- Strengthened the nutrition-agent prompt so recipe answers must include per-ingredient nutrition rows when calculation tool ingredient rows are returned.
 
 ## In Progress
 
@@ -72,3 +74,4 @@ Implementation has started from an empty repository. The product specification l
 - After SQLite lock handling fix: `.venv\Scripts\python.exe -m compileall app tests` passed.
 - After chat/tool SQLite connection isolation fix: `.venv\Scripts\python.exe -m pytest` passed with 12 tests.
 - After chat/tool SQLite connection isolation fix: `.venv\Scripts\python.exe -m compileall app tests` passed.
+- After chat history and per-ingredient prompt update: `.venv\Scripts\python.exe -m pytest` passed with 40 tests.
