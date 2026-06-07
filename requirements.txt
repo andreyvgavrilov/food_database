@@ -4,4 +4,5 @@ pydantic>=2.7
 python-dotenv>=1.0
 deepagents>=0.0.1
 langchain-ollama>=1.0
+mcp>=1.12
 pytest>=8.0

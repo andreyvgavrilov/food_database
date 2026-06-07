@@ -34,6 +34,8 @@ Implementation has started from an empty repository. The product specification l
 - Changed request handlers and Deep Agents nutrition tools to use short-lived SQLite connections instead of sharing one app-level connection across FastAPI requests and agent tool execution.
 - Added SQLite-backed chat threads and messages, chat history API endpoints, UI chat switching/new-chat controls, and history-aware Deep Agents payloads.
 - Strengthened the nutrition-agent prompt so recipe answers must include per-ingredient nutrition rows when calculation tool ingredient rows are returned.
+- Added a stdio MCP server entrypoint that exposes the same `get_ingredient_nutrition` and `calculate_total_nutrition` tools used by the Deep Agents app flow.
+- Documented MCP server usage and client configuration in `README.md`.
 
 ## In Progress
 
@@ -75,3 +77,8 @@ Implementation has started from an empty repository. The product specification l
 - After chat/tool SQLite connection isolation fix: `.venv\Scripts\python.exe -m pytest` passed with 12 tests.
 - After chat/tool SQLite connection isolation fix: `.venv\Scripts\python.exe -m compileall app tests` passed.
 - After chat history and per-ingredient prompt update: `.venv\Scripts\python.exe -m pytest` passed with 40 tests.
+- After MCP server implementation: `.venv\Scripts\python.exe -m pytest tests\test_mcp_server.py` passed with 3 tests.
+- After MCP server implementation: `.venv\Scripts\python.exe -m pip install -r requirements.txt` installed `mcp-1.27.2`.
+- After MCP server implementation: `.venv\Scripts\python.exe -c "from app.mcp_server import create_mcp_server; server = create_mcp_server(); print(type(server).__name__)"` passed and printed `FastMCP`.
+- After MCP server implementation: `.venv\Scripts\python.exe -m compileall app tests` passed.
+- After MCP server implementation: `.venv\Scripts\python.exe -m pytest` passed with 45 tests.

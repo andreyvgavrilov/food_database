@@ -88,6 +88,63 @@ API endpoints:
 - `GET /api/usda/import/status`
 - `POST /api/usda/import`
 
+## MCP Server
+
+The app also includes a stdio MCP server that exposes the same nutrition tools used by the working AI agent:
+
+- `get_ingredient_nutrition`
+- `calculate_total_nutrition`
+
+The MCP server uses the same `.env` configuration, SQLite database, USDA import state, and interaction logs as the FastAPI app. Import USDA data from the Settings page first if the local database has not been populated yet.
+
+Run the MCP server from the repository root:
+
+```bat
+.venv\Scripts\python.exe -m app.mcp_server
+```
+
+On macOS/Linux:
+
+```sh
+.venv/bin/python -m app.mcp_server
+```
+
+Example MCP client configuration:
+
+```json
+{
+  "mcpServers": {
+    "ai-nutrition-agent": {
+      "command": "E:\\Work\\Projects\\food_database\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "app.mcp_server"],
+      "cwd": "E:\\Work\\Projects\\food_database"
+    }
+  }
+}
+```
+
+Example `get_ingredient_nutrition` arguments:
+
+```json
+{
+  "ingredient_name": "olive oil",
+  "preferred_food_category": "Fats and Oils",
+  "max_results": 5
+}
+```
+
+Example `calculate_total_nutrition` arguments:
+
+```json
+{
+  "ingredients": [
+    {"name": "olive oil", "quantity": 1, "unit": "tablespoon"},
+    {"name": "chicken breast", "quantity": 200, "unit": "gram"}
+  ],
+  "servings": 2
+}
+```
+
 ## USDA Data
 
 On first run, if `AUTO_IMPORT_USDA_ON_FIRST_RUN=true`, the app imports JSON files from `USDA_JSON_DUMP_PATH` when that path already exists.
